@@ -2,13 +2,15 @@
 #
 # SPDX-License-Identifier: MIT
 import argparse
+import json
 import sys
 import codecs
-from typing import Any, Dict
+from typing import Any, Dict, List
 from textwrap import dedent
 from importlib.metadata import entry_points
 from .__about__ import __version__
 from ._markitdown import MarkItDown, StreamInfo, DocumentConverterResult
+from .chunking import Chunk, CharacterChunker
 
 
 def main():
@@ -42,6 +44,12 @@ def main():
                 OR
 
                 markitdown example.pdf > example.md
+
+                OR to split the output into chunks (e.g. for embedding/RAG ingestion)
+                use --chunk-size (and optionally --chunk-overlap). Output becomes a
+                single JSON object: {filename: [{text, metadata}, ...]}
+
+                markitdown example.pdf --chunk-size 1000 --chunk-overlap 200
             """
         ).strip(),
     )
@@ -138,8 +146,32 @@ def main():
         help="Keep data URIs (like base64-encoded images) in the output. By default, data URIs are truncated.",
     )
 
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        help="Split the converted output into fixed-size character chunks of this many characters. When set, output becomes JSON Lines (one chunk object per line) with filename/page_no metadata, instead of plain markdown.",
+    )
+
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=0,
+        help="Number of characters of overlap between consecutive chunks. Requires --chunk-size. Default: 0.",
+    )
+
     parser.add_argument("filename", nargs="?")
     args = parser.parse_args()
+
+    # Validate chunking arguments
+    if args.chunk_size is not None:
+        if args.chunk_size <= 0:
+            _exit_with_error("--chunk-size must be greater than 0.")
+        if args.chunk_overlap < 0:
+            _exit_with_error("--chunk-overlap must be >= 0.")
+        if args.chunk_overlap >= args.chunk_size:
+            _exit_with_error("--chunk-overlap must be smaller than --chunk-size.")
+    elif args.chunk_overlap:
+        _exit_with_error("--chunk-overlap requires --chunk-size.")
 
     # Parse the extension hint
     extension_hint = args.extension
@@ -255,7 +287,15 @@ def main():
             args.filename, stream_info=stream_info, keep_data_uris=args.keep_data_uris
         )
 
-    _handle_output(args, result)
+    if args.chunk_size is not None:
+        source_name = args.filename or "<stdin>"
+        chunker = CharacterChunker(
+            chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
+        )
+        chunks = chunker.chunk(result.markdown, filename=source_name)
+        _handle_chunk_output(args, source_name, chunks)
+    else:
+        _handle_output(args, result)
 
 
 def _handle_output(args, result: DocumentConverterResult):
@@ -270,6 +310,23 @@ def _handle_output(args, result: DocumentConverterResult):
                 sys.stdout.encoding
             )
         )
+
+
+def _handle_chunk_output(args, source_name: str, chunks: List[Chunk]):
+    """Handle chunked output as a single JSON object: {filename: [chunk, ...]}"""
+    payload = {
+        source_name: [
+            {"text": c.text, "metadata": c.metadata} for c in chunks
+        ]
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.write("\n")
+    else:
+        # Handle stdout encoding errors more gracefully
+        print(text.encode(sys.stdout.encoding, errors="replace").decode(sys.stdout.encoding))
 
 
 def _exit_with_error(message: str):

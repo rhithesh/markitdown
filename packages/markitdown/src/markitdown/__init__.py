@@ -17,6 +17,7 @@ from ._exceptions import (
     FileConversionException,
     UnsupportedFormatException,
 )
+from .chunking import BaseChunker, Chunk, CharacterChunker
 
 __all__ = [
     "__version__",
@@ -31,4 +32,7 @@ __all__ = [
     "StreamInfo",
     "PRIORITY_SPECIFIC_FILE_FORMAT",
     "PRIORITY_GENERIC_FILE_FORMAT",
+    "BaseChunker",
+    "Chunk",
+    "CharacterChunker",
 ]

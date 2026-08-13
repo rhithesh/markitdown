@@ -6,6 +6,7 @@ from typing import BinaryIO, Any
 from .._base_converter import DocumentConverter, DocumentConverterResult
 from .._stream_info import StreamInfo
 from .._exceptions import MissingDependencyException, MISSING_DEPENDENCY_MESSAGE
+from .._page_markers import pdf_page_marker
 
 # Pattern for MasterFormat-style partial numbering (e.g., ".1", ".2", ".10")
 PARTIAL_NUMBERING_PATTERN = re.compile(r"^\.\d+$")
@@ -55,6 +56,23 @@ def _merge_partial_numbering_lines(text: str) -> str:
             i += 1
 
     return "\n".join(result_lines)
+
+
+def _extract_text_with_page_markers(pdf_bytes: "io.BytesIO") -> str:
+    """
+    Extract text for the whole document via pdfminer, and insert a page
+    marker before each page's text. pdfminer.six's extract_text() already
+    separates pages with a form-feed character (\\x0c); we replace those
+    with an explicit, parseable marker instead.
+    """
+    pdf_bytes.seek(0)
+    raw = pdfminer.high_level.extract_text(pdf_bytes)
+    pages = raw.split("\x0c")
+    return "\n\n".join(
+        pdf_page_marker(page_no) + page_text
+        for page_no, page_text in enumerate(pages, start=1)
+        if page_text.strip()
+    )
 
 
 # Load dependencies
@@ -552,36 +570,34 @@ class PdfConverter(DocumentConverter):
             with pdfplumber.open(pdf_bytes) as pdf:
                 for page_idx, page in enumerate(pdf.pages):
                     page_content = _extract_form_content_from_words(page)
+                    marker = pdf_page_marker(page_idx + 1)
 
                     if page_content is not None:
                         form_page_count += 1
                         if page_content.strip():
-                            markdown_chunks.append(page_content)
+                            markdown_chunks.append(marker + page_content)
                     else:
                         plain_page_indices.append(page_idx)
                         text = page.extract_text()
                         if text and text.strip():
-                            markdown_chunks.append(text.strip())
+                            markdown_chunks.append(marker + text.strip())
 
                     page.close()  # Free cached page data immediately
 
             # If no pages had form-style content, use pdfminer for
             # the whole document (better text spacing for prose).
             if form_page_count == 0:
-                pdf_bytes.seek(0)
-                markdown = pdfminer.high_level.extract_text(pdf_bytes)
+                markdown = _extract_text_with_page_markers(pdf_bytes)
             else:
                 markdown = "\n\n".join(markdown_chunks).strip()
 
         except Exception:
             # Fallback if pdfplumber fails
-            pdf_bytes.seek(0)
-            markdown = pdfminer.high_level.extract_text(pdf_bytes)
+            markdown = _extract_text_with_page_markers(pdf_bytes)
 
         # Fallback if still empty
         if not markdown:
-            pdf_bytes.seek(0)
-            markdown = pdfminer.high_level.extract_text(pdf_bytes)
+            markdown = _extract_text_with_page_markers(pdf_bytes)
 
         # Post-process to merge MasterFormat-style partial numbering with following text
         markdown = _merge_partial_numbering_lines(markdown)

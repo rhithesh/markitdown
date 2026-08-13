@@ -1,3 +1,4 @@
+<!-- Page number: 1 -->
 ZAVA AUTO REPAIR
 Certified Collision Repair
 123 Main Street, Redmond, WA 98052
@@ -36,6 +37,7 @@ models and vehicle maker price updates. Please be advised if vehicle owner elect
 any mechanical concerns, ALL service departments charge a vehicle diagnostic charge. If the mechanical concern is
 deemed not related to an insurance claim, vehicle owner will be reponsible for charges.
 
+<!-- Page number: 2 -->
 ZAVA AUTO REPAIR
 Certified Collision Repair
 123 Main Street, Redmond, WA 98052
@@ -68,6 +70,7 @@ Supplies
 | GRAND TOTAL   |                          |     |        | 211,522   |
 | Note          | Minor rear bumper repair |     |        |           |
 
+<!-- Page number: 3 -->
 This is a preliminary estimate for the visible damage of the vehicle. Additional damage / repairs / parts may be found
 after the vehicle has been disassembled and damaged parts have been removed. Suspension damages may be
 present, but can not be determined until an alignment on the vehicle has been done. Parts Prices may vary due to
