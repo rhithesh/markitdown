@@ -24,6 +24,8 @@ MarkItDown currently supports the conversion from:
 - EPubs
 - ... and more!
 
+It can also split converted output into character-based chunks (with page-number metadata) for embedding/RAG pipelines — see [Chunking](#chunking).
+
 ## Why Markdown?
 
 Markdown is extremely close to plain text, with minimal markup or formatting, but still
@@ -87,6 +89,22 @@ You can also pipe content:
 ```bash
 cat path-to-file.pdf | markitdown
 ```
+
+### Chunking
+
+For embedding/RAG pipelines, split the converted output into fixed-size character chunks with `--chunk-size` (and optionally `--chunk-overlap`):
+
+```bash
+markitdown report.pdf --chunk-size 1000 --chunk-overlap 200
+```
+
+Output becomes a single JSON object instead of plain markdown: `{filename: [{text, metadata}, ...]}`. Each chunk's `metadata` includes `filename`, `chunk_index`, `total_chunks`, and `page_no`. `page_no` is populated for PDF (real page numbers) and PPTX (slide numbers); it's `null` for DOCX and other formats that have no native concept of a page. Whitespace is normalized during chunking (runs of tabs/spaces collapse to one space, excess blank lines collapse to one) so extraction artifacts from formats like PDF don't pollute chunk text.
+
+```bash
+markitdown report.pdf --chunk-size 1000 --chunk-overlap 200 -o chunks.json
+```
+
+writes the same JSON to a file instead of stdout.
 
 ### Optional Dependencies
 MarkItDown has optional dependencies for activating various file formats. Earlier in this document, we installed all optional dependencies with the `[all]` option. However, you can also install them individually for more control. For example:
@@ -279,6 +297,23 @@ md = MarkItDown(llm_client=client, llm_model="gpt-4o", llm_prompt="optional cust
 result = md.convert("example.jpg")
 print(result.text_content)
 ```
+
+Chunking the converted output for embedding/RAG pipelines:
+
+```python
+from markitdown import MarkItDown, CharacterChunker
+
+md = MarkItDown()
+result = md.convert("report.pdf")
+
+chunker = CharacterChunker(chunk_size=1000, chunk_overlap=200)
+chunks = chunker.chunk(result.markdown, filename="report.pdf")
+
+for c in chunks:
+    print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
+```
+
+`CharacterChunker` implements the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
 
 ### Docker
 
