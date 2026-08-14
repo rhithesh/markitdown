@@ -10,7 +10,8 @@ from textwrap import dedent
 from importlib.metadata import entry_points
 from .__about__ import __version__
 from ._markitdown import MarkItDown, StreamInfo, DocumentConverterResult
-from .chunking import Chunk, CharacterChunker
+from ._exceptions import MarkItDownException
+from .chunking import Chunk, CharacterChunker, TokenChunker
 
 
 def main():
@@ -149,14 +150,26 @@ def main():
     parser.add_argument(
         "--chunk-size",
         type=int,
-        help="Split the converted output into fixed-size character chunks of this many characters. When set, output becomes JSON Lines (one chunk object per line) with filename/page_no metadata, instead of plain markdown.",
+        help="Split the converted output into fixed-size chunks of this many units (characters, or tokens if --chunk-strategy=token). When set, output becomes a single JSON object {filename: [{text, metadata}, ...]} instead of plain markdown.",
     )
 
     parser.add_argument(
         "--chunk-overlap",
         type=int,
         default=0,
-        help="Number of characters of overlap between consecutive chunks. Requires --chunk-size. Default: 0.",
+        help="Amount of overlap between consecutive chunks, in the same units as --chunk-size. Requires --chunk-size. Default: 0.",
+    )
+
+    parser.add_argument(
+        "--chunk-strategy",
+        choices=["character", "token"],
+        default="character",
+        help="Chunking strategy: 'character' splits on raw character counts (default); 'token' splits by LLM token counts (via tiktoken, requires the 'chunking' optional dependency) and adds a token_count to each chunk's metadata.",
+    )
+
+    parser.add_argument(
+        "--chunk-model",
+        help="Model name to match tokenization to (requires --chunk-strategy=token). OpenAI model names (e.g. 'gpt-4o') resolve via tiktoken with no extra install; other model names (e.g. 'meta-llama/Llama-3.1-8B') load that model's real tokenizer from HuggingFace, requiring the 'transformers' package and, for gated models, HuggingFace auth.",
     )
 
     parser.add_argument("filename", nargs="?")
@@ -170,8 +183,15 @@ def main():
             _exit_with_error("--chunk-overlap must be >= 0.")
         if args.chunk_overlap >= args.chunk_size:
             _exit_with_error("--chunk-overlap must be smaller than --chunk-size.")
-    elif args.chunk_overlap:
-        _exit_with_error("--chunk-overlap requires --chunk-size.")
+        if args.chunk_model is not None and args.chunk_strategy != "token":
+            _exit_with_error("--chunk-model requires --chunk-strategy=token.")
+    else:
+        if args.chunk_overlap:
+            _exit_with_error("--chunk-overlap requires --chunk-size.")
+        if args.chunk_strategy != "character":
+            _exit_with_error("--chunk-strategy requires --chunk-size.")
+        if args.chunk_model is not None:
+            _exit_with_error("--chunk-model requires --chunk-size.")
 
     # Parse the extension hint
     extension_hint = args.extension
@@ -289,9 +309,20 @@ def main():
 
     if args.chunk_size is not None:
         source_name = args.filename or "<stdin>"
-        chunker = CharacterChunker(
-            chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
-        )
+        try:
+            if args.chunk_strategy == "token":
+                chunker = TokenChunker(
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap,
+                    model=args.chunk_model,
+                )
+            else:
+                chunker = CharacterChunker(
+                    chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
+                )
+        except MarkItDownException as e:
+            _exit_with_error(str(e))
+            return
         chunks = chunker.chunk(result.markdown, filename=source_name)
         _handle_chunk_output(args, source_name, chunks)
     else:

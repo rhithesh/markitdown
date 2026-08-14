@@ -106,6 +106,27 @@ markitdown report.pdf --chunk-size 1000 --chunk-overlap 200 -o chunks.json
 
 writes the same JSON to a file instead of stdout.
 
+By default `--chunk-size`/`--chunk-overlap` count **characters**. Use `--chunk-strategy token` to count **tokens** instead, using the same tokenizer OpenAI models use ([tiktoken](https://github.com/openai/tiktoken)) — this matches how language models actually consume text, rather than raw character counts:
+
+```bash
+markitdown report.pdf --chunk-size 500 --chunk-overlap 50 --chunk-strategy token
+```
+
+Token-based chunks additionally include a `token_count` field in `metadata`. This strategy requires the `chunking` optional dependency (see below): `pip install 'markitdown[chunking]'`.
+
+By default, token counting uses `cl100k_base` (GPT-3.5/4's tokenizer). Pass `--chunk-model` to match a specific model's tokenizer instead:
+
+```bash
+# OpenAI models resolve via tiktoken automatically, no extra download
+markitdown report.pdf --chunk-size 500 --chunk-overlap 50 --chunk-strategy token --chunk-model gpt-4o
+
+# Non-OpenAI models load their real tokenizer from HuggingFace (downloads and
+# caches on first use; gated repos need `huggingface-cli login` or HF_TOKEN)
+markitdown report.pdf --chunk-size 500 --chunk-overlap 50 --chunk-strategy token --chunk-model meta-llama/Llama-3.1-8B
+```
+
+Note: there's no local, offline tokenizer for Claude/Anthropic models — Anthropic's tokenizer is only available via their API. `--chunk-model` with a Claude model name will fail with a clear error rather than silently using the wrong tokenizer.
+
 ### Optional Dependencies
 MarkItDown has optional dependencies for activating various file formats. Earlier in this document, we installed all optional dependencies with the `[all]` option. However, you can also install them individually for more control. For example:
 
@@ -128,6 +149,7 @@ At the moment, the following optional dependencies are available:
 * `[az-content-understanding]` Installs dependencies for Azure Content Understanding
 * `[audio-transcription]` Installs dependencies for audio transcription of wav and mp3 files
 * `[youtube-transcription]` Installs dependencies for fetching YouTube video transcription
+* `[chunking]` Installs dependencies for token-based chunking (`--chunk-strategy token`)
 
 ### Plugins
 
@@ -313,7 +335,24 @@ for c in chunks:
     print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
 ```
 
-`CharacterChunker` implements the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
+Or split by LLM token count instead of characters, using `TokenChunker` (requires `pip install 'markitdown[chunking]'`):
+
+```python
+from markitdown import MarkItDown, TokenChunker
+
+md = MarkItDown()
+result = md.convert("report.pdf")
+
+chunker = TokenChunker(chunk_size=500, chunk_overlap=50, model="gpt-4o")
+chunks = chunker.chunk(result.markdown, filename="report.pdf")
+
+for c in chunks:
+    print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no, token_count
+```
+
+`model` picks the tokenizer: OpenAI model names (e.g. `"gpt-4o"`, `"gpt-4"`) resolve via `tiktoken` automatically; any other model name (e.g. `"meta-llama/Llama-3.1-8B"`) loads that model's real tokenizer from HuggingFace via `transformers.AutoTokenizer` (needs network access on first use, and HuggingFace auth for gated repos). If `model` is omitted, pass `encoding_name` directly instead (default: `"cl100k_base"`).
+
+Both `CharacterChunker` and `TokenChunker` implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
 
 ### Docker
 

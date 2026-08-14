@@ -1,23 +1,11 @@
 # SPDX-FileCopyrightText: 2024-present Adam Fourney <adamfo@microsoft.com>
 #
 # SPDX-License-Identifier: MIT
-import re
 from typing import List, Optional, Tuple
 
 from .._page_markers import page_at_offset, strip_page_markers
 from ._base import BaseChunker, Chunk
-
-# Collapse runs of spaces/tabs into a single space (PDF extraction sometimes
-# emits literal tab characters between words instead of spaces).
-_WHITESPACE_RUN_RE = re.compile(r"[ \t]+")
-# Cap runs of 3+ newlines down to a single blank line.
-_EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
-
-
-def _normalize_whitespace(text: str) -> str:
-    text = _WHITESPACE_RUN_RE.sub(" ", text)
-    text = _EXCESS_BLANK_LINES_RE.sub("\n\n", text)
-    return text
+from ._preprocessing import normalize_whitespace
 
 
 class CharacterChunker(BaseChunker):
@@ -43,7 +31,7 @@ class CharacterChunker(BaseChunker):
     def chunk(self, text: str, *, filename: Optional[str] = None) -> List[Chunk]:
         # Normalize whitespace *before* stripping markers, so the offsets
         # recorded in `breakpoints` line up with the final, sliced text.
-        normalized = _normalize_whitespace(text)
+        normalized = normalize_whitespace(text)
         clean_text, breakpoints = strip_page_markers(normalized)
         if not clean_text:
             return []

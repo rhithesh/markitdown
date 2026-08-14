@@ -17,7 +17,7 @@ from ._exceptions import (
     FileConversionException,
     UnsupportedFormatException,
 )
-from .chunking import BaseChunker, Chunk, CharacterChunker
+from .chunking import BaseChunker, Chunk, CharacterChunker, TokenChunker
 
 __all__ = [
     "__version__",
@@ -35,4 +35,5 @@ __all__ = [
     "BaseChunker",
     "Chunk",
     "CharacterChunker",
+    "TokenChunker",
 ]
