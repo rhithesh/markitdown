@@ -40,8 +40,11 @@ _MISSING_TRANSFORMERS_MESSAGE = (
 
 
 class _TokenizerBackend(Protocol):
-    def encode(self, text: str) -> List[int]: ...
-    def decode(self, tokens: List[int]) -> str: ...
+    def encode(self, text: str) -> List[int]:
+        ...
+
+    def decode(self, tokens: List[int]) -> str:
+        ...
 
 
 class _TiktokenBackend:
@@ -66,13 +69,13 @@ class _HuggingFaceBackend:
         return self._tokenizer.decode(tokens, skip_special_tokens=True)
 
 
-def _resolve_backend(
-    model: Optional[str], encoding_name: str
-) -> _TokenizerBackend:
+def _resolve_backend(model: Optional[str], encoding_name: str) -> _TokenizerBackend:
     if _tiktoken_exc_info is not None:
         raise MissingDependencyException(
             _MISSING_TIKTOKEN_MESSAGE
-        ) from _tiktoken_exc_info[1].with_traceback(  # type: ignore[union-attr]
+        ) from _tiktoken_exc_info[
+            1
+        ].with_traceback(  # type: ignore[union-attr]
             _tiktoken_exc_info[2]
         )
 
@@ -91,7 +94,9 @@ def _resolve_backend(
     if _transformers_exc_info is not None:
         raise MissingDependencyException(
             _MISSING_TRANSFORMERS_MESSAGE.format(model=model)
-        ) from _transformers_exc_info[1].with_traceback(  # type: ignore[union-attr]
+        ) from _transformers_exc_info[
+            1
+        ].with_traceback(  # type: ignore[union-attr]
             _transformers_exc_info[2]
         )
 

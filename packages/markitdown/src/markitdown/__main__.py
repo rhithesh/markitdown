@@ -345,11 +345,7 @@ def _handle_output(args, result: DocumentConverterResult):
 
 def _handle_chunk_output(args, source_name: str, chunks: List[Chunk]):
     """Handle chunked output as a single JSON object: {filename: [chunk, ...]}"""
-    payload = {
-        source_name: [
-            {"text": c.text, "metadata": c.metadata} for c in chunks
-        ]
-    }
+    payload = {source_name: [{"text": c.text, "metadata": c.metadata} for c in chunks]}
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
@@ -357,7 +353,11 @@ def _handle_chunk_output(args, source_name: str, chunks: List[Chunk]):
             f.write("\n")
     else:
         # Handle stdout encoding errors more gracefully
-        print(text.encode(sys.stdout.encoding, errors="replace").decode(sys.stdout.encoding))
+        print(
+            text.encode(sys.stdout.encoding, errors="replace").decode(
+                sys.stdout.encoding
+            )
+        )
 
 
 def _exit_with_error(message: str):
