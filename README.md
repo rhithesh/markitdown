@@ -106,7 +106,15 @@ markitdown report.pdf --chunk-size 1000 --chunk-overlap 200 -o chunks.json
 
 writes the same JSON to a file instead of stdout.
 
-By default `--chunk-size`/`--chunk-overlap` count **characters**. Use `--chunk-strategy token` to count **tokens** instead, using the same tokenizer OpenAI models use ([tiktoken](https://github.com/openai/tiktoken)) — this matches how language models actually consume text, rather than raw character counts:
+By default (`--chunk-strategy character`), text is cut at a strict character count, even mid-word or mid-sentence. Use `--chunk-strategy recursive` instead to prefer natural boundaries -- it tries paragraph breaks first, then falls back to lines, sentences, words, and finally raw characters only for pieces still over `chunk_size`:
+
+```bash
+markitdown report.pdf --chunk-size 1000 --chunk-overlap 200 --chunk-strategy recursive
+```
+
+Every chunk still strictly respects `chunk_size`; overlap between consecutive chunks is best-effort (there's only overlap where there's room left after fitting whole paragraphs/sentences/words, unlike `character`/`token` strategies where it's exact).
+
+Use `--chunk-strategy token` to count **tokens** instead of characters, using the same tokenizer OpenAI models use ([tiktoken](https://github.com/openai/tiktoken)) — this matches how language models actually consume text, rather than raw character counts:
 
 ```bash
 markitdown report.pdf --chunk-size 500 --chunk-overlap 50 --chunk-strategy token
@@ -335,6 +343,21 @@ for c in chunks:
     print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
 ```
 
+Or prefer natural boundaries (paragraphs, lines, sentences, words) using `RecursiveCharacterChunker`, falling back to raw characters only when a piece is still too big:
+
+```python
+from markitdown import MarkItDown, RecursiveCharacterChunker
+
+md = MarkItDown()
+result = md.convert("report.pdf")
+
+chunker = RecursiveCharacterChunker(chunk_size=1000, chunk_overlap=200)
+chunks = chunker.chunk(result.markdown, filename="report.pdf")
+
+for c in chunks:
+    print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
+```
+
 Or split by LLM token count instead of characters, using `TokenChunker` (requires `pip install 'markitdown[chunking]'`):
 
 ```python
@@ -352,7 +375,7 @@ for c in chunks:
 
 `model` picks the tokenizer: OpenAI model names (e.g. `"gpt-4o"`, `"gpt-4"`) resolve via `tiktoken` automatically; any other model name (e.g. `"meta-llama/Llama-3.1-8B"`) loads that model's real tokenizer from HuggingFace via `transformers.AutoTokenizer` (needs network access on first use, and HuggingFace auth for gated repos). If `model` is omitted, pass `encoding_name` directly instead (default: `"cl100k_base"`).
 
-Both `CharacterChunker` and `TokenChunker` implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
+`CharacterChunker`, `RecursiveCharacterChunker`, and `TokenChunker` all implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
 
 ### Docker
 

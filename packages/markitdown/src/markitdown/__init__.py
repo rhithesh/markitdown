@@ -17,7 +17,13 @@ from ._exceptions import (
     FileConversionException,
     UnsupportedFormatException,
 )
-from .chunking import BaseChunker, Chunk, CharacterChunker, TokenChunker
+from .chunking import (
+    BaseChunker,
+    Chunk,
+    CharacterChunker,
+    RecursiveCharacterChunker,
+    TokenChunker,
+)
 
 __all__ = [
     "__version__",
@@ -35,5 +41,6 @@ __all__ = [
     "BaseChunker",
     "Chunk",
     "CharacterChunker",
+    "RecursiveCharacterChunker",
     "TokenChunker",
 ]

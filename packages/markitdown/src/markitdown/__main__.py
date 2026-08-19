@@ -11,7 +11,7 @@ from importlib.metadata import entry_points
 from .__about__ import __version__
 from ._markitdown import MarkItDown, StreamInfo, DocumentConverterResult
 from ._exceptions import MarkItDownException
-from .chunking import Chunk, CharacterChunker, TokenChunker
+from .chunking import Chunk, CharacterChunker, RecursiveCharacterChunker, TokenChunker
 
 
 def main():
@@ -162,9 +162,9 @@ def main():
 
     parser.add_argument(
         "--chunk-strategy",
-        choices=["character", "token"],
+        choices=["character", "recursive", "token"],
         default="character",
-        help="Chunking strategy: 'character' splits on raw character counts (default); 'token' splits by LLM token counts (via tiktoken, requires the 'chunking' optional dependency) and adds a token_count to each chunk's metadata.",
+        help="Chunking strategy: 'character' splits on raw character counts (default); 'recursive' prefers natural boundaries (paragraphs, lines, sentences, words) and only falls back to raw characters when a piece is still too big; 'token' splits by LLM token counts (via tiktoken, requires the 'chunking' optional dependency) and adds a token_count to each chunk's metadata.",
     )
 
     parser.add_argument(
@@ -315,6 +315,10 @@ def main():
                     chunk_size=args.chunk_size,
                     chunk_overlap=args.chunk_overlap,
                     model=args.chunk_model,
+                )
+            elif args.chunk_strategy == "recursive":
+                chunker = RecursiveCharacterChunker(
+                    chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
                 )
             else:
                 chunker = CharacterChunker(
