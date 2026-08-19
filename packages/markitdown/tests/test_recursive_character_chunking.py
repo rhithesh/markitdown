@@ -63,6 +63,21 @@ def test_falls_back_to_sentence_boundaries():
     ]
 
 
+def test_falls_back_to_comma_and_semicolon_boundaries():
+    text = (
+        "First clause here, second clause here; third clause here, fourth clause here"
+    )
+    chunker = RecursiveCharacterChunker(chunk_size=25, chunk_overlap=0)
+    chunks = chunker.chunk(text, filename="test.txt")
+
+    assert [c.text for c in chunks] == [
+        "First clause here",
+        "second clause here",
+        "third clause here",
+        "fourth clause here",
+    ]
+
+
 def test_falls_back_to_raw_characters_as_last_resort():
     # No spaces, no punctuation, no newlines -- nothing to split on but
     # individual characters.

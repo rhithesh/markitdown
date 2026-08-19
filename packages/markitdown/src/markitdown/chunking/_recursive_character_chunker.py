@@ -10,8 +10,9 @@ from ._preprocessing import normalize_whitespace
 # Matches the widely-used LangChain default, as adjusted by Chroma's chunking
 # research (https://research.trychroma.com/evaluating-chunking): sentence
 # punctuation gets its own tier rather than a full "sentence boundary" regex,
-# and "" (individual characters) is always last, guaranteeing termination.
-DEFAULT_SEPARATORS = ["\n\n", "\n", ".", "?", "!", " ", ""]
+# with "," / ";" as a finer clause-boundary tier before falling back to
+# words. "" (individual characters) is always last, guaranteeing termination.
+DEFAULT_SEPARATORS = ["\n\n", "\n", ".", "?", "!", ",", ";", " ", ""]
 
 
 def _merge_splits(
