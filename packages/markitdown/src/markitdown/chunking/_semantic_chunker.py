@@ -127,9 +127,7 @@ class SemanticChunker(BaseChunker):
         if buffer_size < 0:
             raise ValueError("buffer_size must be >= 0")
         if not (0 <= min_percentile < max_percentile <= 100):
-            raise ValueError(
-                "require 0 <= min_percentile < max_percentile <= 100"
-            )
+            raise ValueError("require 0 <= min_percentile < max_percentile <= 100")
         if not (0 < tolerance < 1):
             raise ValueError("tolerance must be between 0 and 1")
 
