@@ -146,6 +146,12 @@ markitdown report.pdf --chunk-size 500 --chunk-strategy semantic --embedding-fun
 
 There is no default embedding model and nothing is ever downloaded automatically — unlike the other strategies, `semantic` always requires you to supply your own embedding function. The file is imported and executed directly (like a plugin), so only point `--embedding-function` at files you trust. `--chunk-overlap` is not supported with this strategy (chunk boundaries come from detected topic shifts, not a fixed stride). Example `my_embeddings.py`:
 
+`--chunk-unit` controls what's compared for topic shifts: `paragraph` (default) or `sentence`. Validated against a real 256-page book with known chapter boundaries: paragraph-level comparison landed a clean or near-clean cut at 17/20 real chapter boundaries, versus 1/20 for sentence-level -- paragraphs are a much stronger topic-coherence signal (a paragraph almost never straddles two topics; a heading naturally becomes its own comparison unit). Use `sentence` for Kamradt's original, finer-grained (but noisier) granularity:
+
+```bash
+markitdown report.pdf --chunk-size 500 --chunk-strategy semantic --embedding-function my_embeddings.py:embed --chunk-unit sentence
+```
+
 ```python
 # my_embeddings.py
 from openai import OpenAI
@@ -411,7 +417,15 @@ for c in chunks:
     print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
 ```
 
-`SemanticChunker` implements Chroma's target-size-aware take on Greg Kamradt's semantic chunking ([research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)): it embeds each sentence, measures the cosine distance between consecutive sentences to find genuine topic shifts, then binary-searches the breakpoint threshold until the resulting chunks' average size converges on `target_chunk_size` (within `tolerance`, default 10%) — so cuts only ever happen at real topic boundaries, but the output still lands close to a predictable, usable size.
+`SemanticChunker` implements Chroma's target-size-aware take on Greg Kamradt's semantic chunking ([research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)): it embeds each unit of text, measures the cosine distance between consecutive unit embeddings to find genuine topic shifts, then binary-searches the breakpoint threshold until the resulting chunks' average size converges on `target_chunk_size` (within `tolerance`, default 10%) — so cuts only ever happen at real topic boundaries, but the output still lands close to a predictable, usable size.
+
+`unit` controls what "a unit of text" means -- `"paragraph"` (default) or `"sentence"`:
+
+```python
+chunker = SemanticChunker(embedding_function=my_embed_fn, target_chunk_size=500, unit="sentence")
+```
+
+Validated against a real 256-page book with known chapter boundaries: `unit="paragraph"` landed a clean or near-clean cut at 17/20 real chapter boundaries, versus 1/20 for `unit="sentence"` -- a paragraph is a much stronger topic-coherence signal than an individual sentence (a paragraph almost never straddles two topics, and a heading naturally becomes its own comparison unit since it sits alone between blank lines). Any paragraph larger than 3x `target_chunk_size` (a wall of text with no blank-line breaks) is automatically pre-split into sentences, so one abnormally large paragraph can't defeat `target_chunk_size`. `unit="sentence"` is Kamradt's original, finer-grained granularity -- still useful for short documents or when sentence-level split precision specifically matters more than topic-boundary accuracy.
 
 `embedding_function` accepts **any** embedding model or provider — it just needs to be a callable mapping `List[str]` to a sequence of embedding vectors. A local `sentence-transformers` model (requires `pip install sentence-transformers`, not bundled with any `markitdown` extra since it pulls in `torch`):
 

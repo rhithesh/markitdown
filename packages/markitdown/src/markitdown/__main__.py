@@ -185,6 +185,12 @@ def main():
         help="Required for --chunk-strategy=semantic. Path to a Python file defining the embedding function, plus the function's name, in the form 'path/to/file.py:function_name'. The function must accept a List[str] and return a sequence of embedding vectors, one per input string. There is no default embedding model -- the file is imported and executed directly, so only point this at scripts you trust.",
     )
 
+    parser.add_argument(
+        "--chunk-unit",
+        choices=["paragraph", "sentence"],
+        help="Only used with --chunk-strategy=semantic. Base unit compared for topic shifts: 'paragraph' (default) is validated to be substantially more accurate at finding real structural boundaries (e.g. section/chapter breaks) than 'sentence', which is Kamradt's original, finer-grained but noisier granularity.",
+    )
+
     parser.add_argument("filename", nargs="?")
     args = parser.parse_args()
 
@@ -210,6 +216,8 @@ def main():
             _exit_with_error("--chunk-model requires --chunk-strategy=token.")
         if args.embedding_function is not None and args.chunk_strategy != "semantic":
             _exit_with_error("--embedding-function requires --chunk-strategy=semantic.")
+        if args.chunk_unit is not None and args.chunk_strategy != "semantic":
+            _exit_with_error("--chunk-unit requires --chunk-strategy=semantic.")
     else:
         if args.chunk_overlap:
             _exit_with_error("--chunk-overlap requires --chunk-size.")
@@ -219,6 +227,8 @@ def main():
             _exit_with_error("--chunk-model requires --chunk-size.")
         if args.embedding_function is not None:
             _exit_with_error("--embedding-function requires --chunk-size.")
+        if args.chunk_unit is not None:
+            _exit_with_error("--chunk-unit requires --chunk-size.")
 
     # Parse the extension hint
     extension_hint = args.extension
@@ -352,6 +362,7 @@ def main():
                 chunker = SemanticChunker(
                     embedding_function=embedding_function,
                     target_chunk_size=args.chunk_size,
+                    unit=args.chunk_unit or "paragraph",
                 )
             else:
                 chunker = CharacterChunker(
