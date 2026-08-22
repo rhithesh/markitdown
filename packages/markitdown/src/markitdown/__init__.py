@@ -23,6 +23,7 @@ from .chunking import (
     CharacterChunker,
     RecursiveCharacterChunker,
     TokenChunker,
+    SemanticChunker,
 )
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "CharacterChunker",
     "RecursiveCharacterChunker",
     "TokenChunker",
+    "SemanticChunker",
 ]

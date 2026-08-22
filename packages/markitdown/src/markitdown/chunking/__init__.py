@@ -5,6 +5,7 @@ from ._base import BaseChunker, Chunk
 from ._character_chunker import CharacterChunker
 from ._recursive_character_chunker import RecursiveCharacterChunker
 from ._token_chunker import TokenChunker
+from ._semantic_chunker import SemanticChunker
 
 __all__ = [
     "BaseChunker",
@@ -12,4 +13,5 @@ __all__ = [
     "CharacterChunker",
     "RecursiveCharacterChunker",
     "TokenChunker",
+    "SemanticChunker",
 ]

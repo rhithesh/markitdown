@@ -1,3 +1,7 @@
+curl -X GET "http://localhost:4000/api/report/6a67220ea4dc19ef4e3ea026/pdf" \
+  -H "x-user-id: test" \
+  -H "x-user-account: vaia_demo" \
+  --output report.pdf
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies

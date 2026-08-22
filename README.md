@@ -158,6 +158,7 @@ At the moment, the following optional dependencies are available:
 * `[audio-transcription]` Installs dependencies for audio transcription of wav and mp3 files
 * `[youtube-transcription]` Installs dependencies for fetching YouTube video transcription
 * `[chunking]` Installs dependencies for token-based chunking (`--chunk-strategy token`)
+* `[semantic-chunking]` Installs dependencies for `SemanticChunker`'s default embedding model (`sentence-transformers`, which pulls in `torch`). Not included in `[all]` due to its size -- install it explicitly, or pass your own `embedding_function` to `SemanticChunker` to skip this dependency entirely.
 
 ### Plugins
 
@@ -375,7 +376,30 @@ for c in chunks:
 
 `model` picks the tokenizer: OpenAI model names (e.g. `"gpt-4o"`, `"gpt-4"`) resolve via `tiktoken` automatically; any other model name (e.g. `"meta-llama/Llama-3.1-8B"`) loads that model's real tokenizer from HuggingFace via `transformers.AutoTokenizer` (needs network access on first use, and HuggingFace auth for gated repos). If `model` is omitted, pass `encoding_name` directly instead (default: `"cl100k_base"`).
 
-`CharacterChunker`, `RecursiveCharacterChunker`, and `TokenChunker` all implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
+Or split at actual topic boundaries instead of a fixed size, using `SemanticChunker` (requires `pip install 'markitdown[semantic-chunking]'`, or pass your own `embedding_function`):
+
+```python
+from markitdown import MarkItDown, SemanticChunker
+
+md = MarkItDown()
+result = md.convert("report.pdf")
+
+chunker = SemanticChunker(target_chunk_size=500)
+chunks = chunker.chunk(result.markdown, filename="report.pdf")
+
+for c in chunks:
+    print(c.text, c.metadata)  # metadata: filename, chunk_index, total_chunks, page_no
+```
+
+`SemanticChunker` implements Chroma's target-size-aware take on Greg Kamradt's semantic chunking ([research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)): it embeds each sentence, measures the cosine distance between consecutive sentences to find genuine topic shifts, then binary-searches the breakpoint threshold until the resulting chunks' average size converges on `target_chunk_size` (within `tolerance`, default 10%) — so cuts only ever happen at real topic boundaries, but the output still lands close to a predictable, usable size.
+
+By default it embeds sentences with `sentence-transformers`' `all-MiniLM-L6-v2` model (downloaded and cached locally on first use). To use your own embedding model instead (an OpenAI client, a chromadb `EmbeddingFunction`, etc.), pass `embedding_function` — any callable mapping `List[str]` to a sequence of embedding vectors:
+
+```python
+chunker = SemanticChunker(embedding_function=my_embed_fn, target_chunk_size=500)
+```
+
+`CharacterChunker`, `RecursiveCharacterChunker`, `TokenChunker`, and `SemanticChunker` all implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
 
 ### Docker
 
