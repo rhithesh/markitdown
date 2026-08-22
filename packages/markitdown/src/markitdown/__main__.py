@@ -2,16 +2,24 @@
 #
 # SPDX-License-Identifier: MIT
 import argparse
+import importlib.util
 import json
 import sys
 import codecs
+from pathlib import Path
 from typing import Any, Dict, List
 from textwrap import dedent
 from importlib.metadata import entry_points
 from .__about__ import __version__
 from ._markitdown import MarkItDown, StreamInfo, DocumentConverterResult
 from ._exceptions import MarkItDownException
-from .chunking import Chunk, CharacterChunker, RecursiveCharacterChunker, TokenChunker
+from .chunking import (
+    Chunk,
+    CharacterChunker,
+    RecursiveCharacterChunker,
+    TokenChunker,
+    SemanticChunker,
+)
 
 
 def main():
@@ -162,14 +170,19 @@ def main():
 
     parser.add_argument(
         "--chunk-strategy",
-        choices=["character", "recursive", "token"],
+        choices=["character", "recursive", "token", "semantic"],
         default="character",
-        help="Chunking strategy: 'character' splits on raw character counts (default); 'recursive' prefers natural boundaries (paragraphs, lines, sentences, words) and only falls back to raw characters when a piece is still too big; 'token' splits by LLM token counts (via tiktoken, requires the 'chunking' optional dependency) and adds a token_count to each chunk's metadata.",
+        help="Chunking strategy: 'character' splits on raw character counts (default); 'recursive' prefers natural boundaries (paragraphs, lines, sentences, words) and only falls back to raw characters when a piece is still too big; 'token' splits by LLM token counts (via tiktoken, requires the 'chunking' optional dependency) and adds a token_count to each chunk's metadata; 'semantic' splits at topic boundaries found by an embedding model, binary-searching for chunks near --chunk-size on average (requires --embedding-function; no overlap support).",
     )
 
     parser.add_argument(
         "--chunk-model",
         help="Model name to match tokenization to (requires --chunk-strategy=token). OpenAI model names (e.g. 'gpt-4o') resolve via tiktoken with no extra install; other model names (e.g. 'meta-llama/Llama-3.1-8B') load that model's real tokenizer from HuggingFace, requiring the 'transformers' package and, for gated models, HuggingFace auth.",
+    )
+
+    parser.add_argument(
+        "--embedding-function",
+        help="Required for --chunk-strategy=semantic. Path to a Python file defining the embedding function, plus the function's name, in the form 'path/to/file.py:function_name'. The function must accept a List[str] and return a sequence of embedding vectors, one per input string. There is no default embedding model -- the file is imported and executed directly, so only point this at scripts you trust.",
     )
 
     parser.add_argument("filename", nargs="?")
@@ -181,10 +194,22 @@ def main():
             _exit_with_error("--chunk-size must be greater than 0.")
         if args.chunk_overlap < 0:
             _exit_with_error("--chunk-overlap must be >= 0.")
-        if args.chunk_overlap >= args.chunk_size:
-            _exit_with_error("--chunk-overlap must be smaller than --chunk-size.")
+        if args.chunk_strategy == "semantic":
+            if args.chunk_overlap:
+                _exit_with_error(
+                    "--chunk-overlap is not supported with --chunk-strategy=semantic."
+                )
+            if args.embedding_function is None:
+                _exit_with_error(
+                    "--embedding-function is required with --chunk-strategy=semantic."
+                )
+        else:
+            if args.chunk_overlap >= args.chunk_size:
+                _exit_with_error("--chunk-overlap must be smaller than --chunk-size.")
         if args.chunk_model is not None and args.chunk_strategy != "token":
             _exit_with_error("--chunk-model requires --chunk-strategy=token.")
+        if args.embedding_function is not None and args.chunk_strategy != "semantic":
+            _exit_with_error("--embedding-function requires --chunk-strategy=semantic.")
     else:
         if args.chunk_overlap:
             _exit_with_error("--chunk-overlap requires --chunk-size.")
@@ -192,6 +217,8 @@ def main():
             _exit_with_error("--chunk-strategy requires --chunk-size.")
         if args.chunk_model is not None:
             _exit_with_error("--chunk-model requires --chunk-size.")
+        if args.embedding_function is not None:
+            _exit_with_error("--embedding-function requires --chunk-size.")
 
     # Parse the extension hint
     extension_hint = args.extension
@@ -320,6 +347,12 @@ def main():
                 chunker = RecursiveCharacterChunker(
                     chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
                 )
+            elif args.chunk_strategy == "semantic":
+                embedding_function = _load_embedding_function(args.embedding_function)
+                chunker = SemanticChunker(
+                    embedding_function=embedding_function,
+                    target_chunk_size=args.chunk_size,
+                )
             else:
                 chunker = CharacterChunker(
                     chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap
@@ -362,6 +395,49 @@ def _handle_chunk_output(args, source_name: str, chunks: List[Chunk]):
                 sys.stdout.encoding
             )
         )
+
+
+def _load_embedding_function(spec: str):
+    """
+    Load an embedding_function for --chunk-strategy=semantic from a
+    'path/to/file.py:function_name' spec. Imports and executes the file
+    directly (like a plugin), so only trusted files should be passed here.
+    """
+    if ":" not in spec:
+        _exit_with_error(
+            "--embedding-function must be in the form path/to/file.py:function_name "
+            f"(got: {spec!r})"
+        )
+
+    path_str, func_name = spec.rsplit(":", 1)
+    path = Path(path_str)
+    if not path.is_file():
+        _exit_with_error(f"--embedding-function file not found: {path}")
+
+    module_spec = importlib.util.spec_from_file_location(
+        "_markitdown_cli_embedding_module", path
+    )
+    if module_spec is None or module_spec.loader is None:
+        _exit_with_error(f"--embedding-function could not load module from: {path}")
+        return  # unreachable, keeps type-checkers happy
+
+    module = importlib.util.module_from_spec(module_spec)
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception as e:
+        _exit_with_error(f"--embedding-function failed to import {path}: {e}")
+        return  # unreachable
+
+    if not hasattr(module, func_name):
+        _exit_with_error(f"{path} has no attribute '{func_name}'")
+        return  # unreachable
+
+    embedding_function = getattr(module, func_name)
+    if not callable(embedding_function):
+        _exit_with_error(f"{path}:{func_name} is not callable")
+        return  # unreachable
+
+    return embedding_function
 
 
 def _exit_with_error(message: str):

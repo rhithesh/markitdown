@@ -2,28 +2,18 @@
 #
 # SPDX-License-Identifier: MIT
 import re
-import sys
 from typing import Callable, List, Optional, Sequence
 
-from .._exceptions import MissingDependencyException
 from .._page_markers import page_at_offset, strip_page_markers
 from ._base import BaseChunker, Chunk
 from ._preprocessing import normalize_whitespace
 
-_sentence_transformers_exc_info = None
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    _sentence_transformers_exc_info = sys.exc_info()
-
 _MISSING_EMBEDDING_MESSAGE = (
-    "SemanticChunker requires an embedding_function. Either pass one "
-    "explicitly -- any callable mapping List[str] -> a sequence of "
-    "embedding vectors, e.g. an OpenAI embeddings client wrapper or a "
-    "chromadb EmbeddingFunction -- or install the optional "
-    "'sentence-transformers' dependency to use the default local model:\n\n"
-    "  pip install 'markitdown[semantic-chunking]'\n"
-    "  pip install sentence-transformers"
+    "SemanticChunker requires an embedding_function -- there is no default "
+    "embedding model, so nothing is ever downloaded automatically. Pass any "
+    "callable mapping List[str] -> a sequence of embedding vectors, e.g. an "
+    "OpenAI embeddings client wrapper, a chromadb EmbeddingFunction, or a "
+    "sentence-transformers model.encode call."
 )
 
 # Splits on sentence-ending punctuation followed by whitespace. Deliberately
@@ -32,20 +22,6 @@ _MISSING_EMBEDDING_MESSAGE = (
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.?!])\s+")
 
 EmbeddingFunction = Callable[[List[str]], Sequence[Sequence[float]]]
-
-
-def _default_embedding_function() -> EmbeddingFunction:
-    if _sentence_transformers_exc_info is not None:
-        raise MissingDependencyException(
-            _MISSING_EMBEDDING_MESSAGE
-        ) from _sentence_transformers_exc_info[
-            1
-        ].with_traceback(  # type: ignore[union-attr]
-            _sentence_transformers_exc_info[2]
-        )
-
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    return lambda texts: model.encode(texts, show_progress_bar=False)
 
 
 def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
@@ -122,6 +98,8 @@ class SemanticChunker(BaseChunker):
         max_iterations: int = 8,
         tolerance: float = 0.1,
     ):
+        if embedding_function is None:
+            raise ValueError(_MISSING_EMBEDDING_MESSAGE)
         if target_chunk_size <= 0:
             raise ValueError("target_chunk_size must be greater than 0")
         if buffer_size < 0:
@@ -131,7 +109,7 @@ class SemanticChunker(BaseChunker):
         if not (0 < tolerance < 1):
             raise ValueError("tolerance must be between 0 and 1")
 
-        self.embedding_function = embedding_function or _default_embedding_function()
+        self.embedding_function = embedding_function
         self.target_chunk_size = target_chunk_size
         self.length_function = length_function
         self.buffer_size = buffer_size

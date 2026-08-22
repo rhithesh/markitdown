@@ -138,6 +138,24 @@ markitdown report.pdf --chunk-size 500 --chunk-overlap 50 --chunk-strategy token
 
 Note: there's no local, offline tokenizer for Claude/Anthropic models — Anthropic's tokenizer is only available via their API. `--chunk-model` with a Claude model name will fail with a clear error rather than silently using the wrong tokenizer.
 
+Use `--chunk-strategy semantic` to split at actual topic boundaries instead of a fixed size, using an embedding model to detect where the topic shifts (see [Python API](#python-api) below for the full algorithm explanation). This strategy requires `--embedding-function`, pointing at a Python file and function name in `path/to/file.py:function_name` form — the function must accept a `List[str]` and return one embedding vector per input string:
+
+```bash
+markitdown report.pdf --chunk-size 500 --chunk-strategy semantic --embedding-function my_embeddings.py:embed
+```
+
+There is no default embedding model and nothing is ever downloaded automatically — unlike the other strategies, `semantic` always requires you to supply your own embedding function. The file is imported and executed directly (like a plugin), so only point `--embedding-function` at files you trust. `--chunk-overlap` is not supported with this strategy (chunk boundaries come from detected topic shifts, not a fixed stride). Example `my_embeddings.py`:
+
+```python
+# my_embeddings.py
+from openai import OpenAI
+client = OpenAI()
+
+def embed(texts):
+    response = client.embeddings.create(model="text-embedding-3-small", input=texts)
+    return [d.embedding for d in response.data]
+```
+
 ### Optional Dependencies
 MarkItDown has optional dependencies for activating various file formats. Earlier in this document, we installed all optional dependencies with the `[all]` option. However, you can also install them individually for more control. For example:
 
@@ -161,7 +179,6 @@ At the moment, the following optional dependencies are available:
 * `[audio-transcription]` Installs dependencies for audio transcription of wav and mp3 files
 * `[youtube-transcription]` Installs dependencies for fetching YouTube video transcription
 * `[chunking]` Installs dependencies for token-based chunking (`--chunk-strategy token`)
-* `[semantic-chunking]` Installs dependencies for `SemanticChunker`'s default embedding model (`sentence-transformers`, which pulls in `torch`). Not included in `[all]` due to its size -- install it explicitly, or pass your own `embedding_function` to `SemanticChunker` to skip this dependency entirely.
 
 ### Plugins
 
@@ -379,7 +396,7 @@ for c in chunks:
 
 `model` picks the tokenizer: OpenAI model names (e.g. `"gpt-4o"`, `"gpt-4"`) resolve via `tiktoken` automatically; any other model name (e.g. `"meta-llama/Llama-3.1-8B"`) loads that model's real tokenizer from HuggingFace via `transformers.AutoTokenizer` (needs network access on first use, and HuggingFace auth for gated repos). If `model` is omitted, pass `encoding_name` directly instead (default: `"cl100k_base"`).
 
-Or split at actual topic boundaries instead of a fixed size, using `SemanticChunker` (requires `pip install 'markitdown[semantic-chunking]'`, or pass your own `embedding_function`):
+Or split at actual topic boundaries instead of a fixed size, using `SemanticChunker`. Unlike the other strategies, it requires an `embedding_function` -- there is no default embedding model, so nothing is ever downloaded automatically:
 
 ```python
 from markitdown import MarkItDown, SemanticChunker
@@ -387,7 +404,7 @@ from markitdown import MarkItDown, SemanticChunker
 md = MarkItDown()
 result = md.convert("report.pdf")
 
-chunker = SemanticChunker(target_chunk_size=500)
+chunker = SemanticChunker(embedding_function=my_embed_fn, target_chunk_size=500)
 chunks = chunker.chunk(result.markdown, filename="report.pdf")
 
 for c in chunks:
@@ -396,13 +413,7 @@ for c in chunks:
 
 `SemanticChunker` implements Chroma's target-size-aware take on Greg Kamradt's semantic chunking ([research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)): it embeds each sentence, measures the cosine distance between consecutive sentences to find genuine topic shifts, then binary-searches the breakpoint threshold until the resulting chunks' average size converges on `target_chunk_size` (within `tolerance`, default 10%) — so cuts only ever happen at real topic boundaries, but the output still lands close to a predictable, usable size.
 
-By default it embeds sentences with `sentence-transformers`' `all-MiniLM-L6-v2` model (downloaded and cached locally on first use). `embedding_function` accepts **any** embedding model or provider — it just needs to be a callable mapping `List[str]` to a sequence of embedding vectors:
-
-```python
-chunker = SemanticChunker(embedding_function=my_embed_fn, target_chunk_size=500)
-```
-
-A different local `sentence-transformers` model:
+`embedding_function` accepts **any** embedding model or provider — it just needs to be a callable mapping `List[str]` to a sequence of embedding vectors. A local `sentence-transformers` model (requires `pip install sentence-transformers`, not bundled with any `markitdown` extra since it pulls in `torch`):
 
 ```python
 from sentence_transformers import SentenceTransformer

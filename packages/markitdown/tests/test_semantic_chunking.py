@@ -1,17 +1,17 @@
 #!/usr/bin/env python3 -m pytest
 import pytest
 
-from markitdown import MarkItDownException, SemanticChunker
+from markitdown import SemanticChunker
 
 # This file tests SemanticChunker in isolation, using plain strings and a
-# deterministic fake embedding_function -- real semantic chunking depends on
-# an actual embedding model (sentence-transformers by default, which pulls
-# in torch), so tests instead supply a small callable that maps each
-# combined-sentence string to a one-hot "topic" vector. Sentences from the
-# same topic get identical embeddings (cosine distance 0); sentences from
-# different topics get orthogonal embeddings (cosine distance 1). This lets
-# the binary search over percentile thresholds be exercised with fully
-# predictable, hash-free inputs.
+# deterministic fake embedding_function -- SemanticChunker has no default
+# embedding model (embedding_function is required), so tests instead supply
+# a small callable that maps each combined-sentence string to a one-hot
+# "topic" vector. Sentences from the same topic get identical embeddings
+# (cosine distance 0); sentences from different topics get orthogonal
+# embeddings (cosine distance 1). This lets the binary search over
+# percentile thresholds be exercised with fully predictable, hash-free
+# inputs, with no real embedding model or network access required.
 
 
 def _topic_embedding_function(topics_by_keyword):
@@ -42,11 +42,11 @@ TOPIC_A = "Cats are small domesticated carnivorous mammals. Cats have retractabl
 TOPIC_B = "Quantum computers use qubits instead of classical bits. Quantum computers exploit superposition. Quantum computers may break current encryption."
 
 
-def test_missing_embedding_function_raises_missing_dependency():
-    # No embedding_function passed, and sentence-transformers is not
-    # installed in the test environment -- should raise a clear,
-    # actionable error rather than an ImportError.
-    with pytest.raises(MarkItDownException):
+def test_missing_embedding_function_raises_value_error():
+    # embedding_function is required -- there is no default embedding
+    # model, so omitting it must raise a clear, actionable error rather
+    # than silently downloading something or failing deep inside chunk().
+    with pytest.raises(ValueError):
         SemanticChunker()
 
 
