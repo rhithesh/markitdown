@@ -393,11 +393,48 @@ for c in chunks:
 
 `SemanticChunker` implements Chroma's target-size-aware take on Greg Kamradt's semantic chunking ([research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)): it embeds each sentence, measures the cosine distance between consecutive sentences to find genuine topic shifts, then binary-searches the breakpoint threshold until the resulting chunks' average size converges on `target_chunk_size` (within `tolerance`, default 10%) — so cuts only ever happen at real topic boundaries, but the output still lands close to a predictable, usable size.
 
-By default it embeds sentences with `sentence-transformers`' `all-MiniLM-L6-v2` model (downloaded and cached locally on first use). To use your own embedding model instead (an OpenAI client, a chromadb `EmbeddingFunction`, etc.), pass `embedding_function` — any callable mapping `List[str]` to a sequence of embedding vectors:
+By default it embeds sentences with `sentence-transformers`' `all-MiniLM-L6-v2` model (downloaded and cached locally on first use). `embedding_function` accepts **any** embedding model or provider — it just needs to be a callable mapping `List[str]` to a sequence of embedding vectors:
 
 ```python
 chunker = SemanticChunker(embedding_function=my_embed_fn, target_chunk_size=500)
 ```
+
+A different local `sentence-transformers` model:
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-mpnet-base-v2")
+chunker = SemanticChunker(
+    embedding_function=lambda texts: model.encode(texts, show_progress_bar=False),
+    target_chunk_size=500,
+)
+```
+
+OpenAI:
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def openai_embed(texts):
+    response = client.embeddings.create(model="text-embedding-3-small", input=texts)
+    return [d.embedding for d in response.data]
+
+chunker = SemanticChunker(embedding_function=openai_embed, target_chunk_size=500)
+```
+
+chromadb's `EmbeddingFunction`s work directly, since they're already callables with the same signature:
+
+```python
+from chromadb.utils import embedding_functions
+
+ef = embedding_functions.OpenAIEmbeddingFunction(api_key="...", model_name="text-embedding-3-small")
+chunker = SemanticChunker(embedding_function=ef, target_chunk_size=500)
+```
+
+The same pattern works for Cohere, Voyage, Google, Ollama, or any other embedding provider/local model — wrap a call to it in a function with that `List[str] -> embeddings` signature.
 
 `CharacterChunker`, `RecursiveCharacterChunker`, `TokenChunker`, and `SemanticChunker` all implement the `BaseChunker` interface (`chunk(text, *, filename=None) -> List[Chunk]`), so additional chunking strategies can be added behind the same interface.
 
