@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+python-multipart
+-e ../../packages/markitdown[all]

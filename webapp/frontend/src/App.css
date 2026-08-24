@@ -1,0 +1,203 @@
+* {
+  box-sizing: border-box;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1a1a1a;
+  text-align: left;
+}
+
+.header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+}
+
+.header p {
+  margin: 0 0 1.5rem;
+  color: #666;
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.mode-tabs button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #d0d0d5;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #444;
+}
+
+.mode-tabs button:hover {
+  background: #f2f2f5;
+}
+
+.mode-tabs button.active {
+  background: #6a6af0;
+  border-color: #6a6af0;
+  color: white;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: #f7f7f8;
+  border-radius: 8px;
+}
+
+.options label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.options select,
+.options input {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #d0d0d5;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  min-width: 120px;
+}
+
+.dropzone {
+  border: 2px dashed #c3c3cc;
+  border-radius: 12px;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  color: #666;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover {
+  border-color: #8b8bfa;
+}
+
+.dropzone-active {
+  border-color: #6a6af0;
+  background: #f2f2ff;
+}
+
+.error {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: #fdecea;
+  border: 1px solid #f5c2bd;
+  border-radius: 8px;
+  color: #9a2b1f;
+  white-space: pre-wrap;
+}
+
+.result {
+  margin-top: 2rem;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.result-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  word-break: break-word;
+}
+
+.result-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.result-actions button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #d0d0d5;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.result-actions button:hover {
+  background: #f2f2f5;
+}
+
+.view-toggle {
+  display: flex;
+  border: 1px solid #d0d0d5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.view-toggle button {
+  border: none;
+  border-radius: 0;
+}
+
+.view-toggle button.active {
+  background: #6a6af0;
+  color: white;
+}
+
+.markdown-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f7f7f8;
+  border-radius: 8px;
+  padding: 1.25rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.chunks-output {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.chunk-card {
+  border: 1px solid #e0e0e5;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: #fafafa;
+}
+
+.chunk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+
+.chunk-card pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
