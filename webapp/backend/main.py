@@ -115,6 +115,7 @@ class ConvertResponse(BaseModel):
 
 # ---- Project models -------------------------------------------------------
 
+
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Project name")
     description: Optional[str] = Field(
@@ -362,6 +363,7 @@ async def convert(
 # Projects API
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/projects", response_model=List[ProjectOut])
 def list_projects():
     with _projects_lock:
@@ -386,7 +388,9 @@ def create_project(payload: ProjectCreate):
                 status_code=400,
                 detail=f"chunk_strategy must be one of {sorted(CHUNK_STRATEGIES)}",
             )
-        if payload.chunk_strategy and (payload.chunk_size is None or payload.chunk_size <= 0):
+        if payload.chunk_strategy and (
+            payload.chunk_size is None or payload.chunk_size <= 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="chunk_size is required and must be > 0 when chunk_strategy is set.",
@@ -441,7 +445,9 @@ def update_project(project_id: str, payload: ProjectUpdate):
         if payload.name is not None:
             n = payload.name.strip()
             if not n:
-                raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+                raise HTTPException(
+                    status_code=400, detail="Project name cannot be empty."
+                )
             # check duplicate
             for other_id, other in _projects_store.items():
                 if other_id != project_id and other["name"].lower() == n.lower():
@@ -454,7 +460,10 @@ def update_project(project_id: str, payload: ProjectUpdate):
             p["description"] = payload.description.strip() or None
 
         if payload.chunk_strategy is not None:
-            if payload.chunk_strategy and payload.chunk_strategy not in CHUNK_STRATEGIES:
+            if (
+                payload.chunk_strategy
+                and payload.chunk_strategy not in CHUNK_STRATEGIES
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"chunk_strategy must be one of {sorted(CHUNK_STRATEGIES)}",
@@ -468,7 +477,9 @@ def update_project(project_id: str, payload: ProjectUpdate):
 
         if payload.chunk_overlap is not None:
             if payload.chunk_overlap < 0:
-                raise HTTPException(status_code=400, detail="chunk_overlap must be >= 0.")
+                raise HTTPException(
+                    status_code=400, detail="chunk_overlap must be >= 0."
+                )
             p["chunk_overlap"] = payload.chunk_overlap
 
         if payload.chunk_model is not None:
@@ -497,10 +508,13 @@ def touch_project(project_id: str):
         p["updated_at"] = _now_iso()
         _projects_store[project_id] = p
         _save_projects()
-        return ProjectOut(**{k: v for k, v in p.items() if k in ProjectOut.model_fields})
+        return ProjectOut(
+            **{k: v for k, v in p.items() if k in ProjectOut.model_fields}
+        )
 
 
 # ---- Project files (many files per project) --------------------------------
+
 
 @app.get("/api/projects/{project_id}/files", response_model=List[ProjectFileOut])
 def list_project_files(project_id: str):
@@ -510,7 +524,9 @@ def list_project_files(project_id: str):
             raise HTTPException(status_code=404, detail="Project not found.")
         files = p.get("files", [])
         # newest first
-        files_sorted = sorted(files, key=lambda x: x.get("created_at", ""), reverse=True)
+        files_sorted = sorted(
+            files, key=lambda x: x.get("created_at", ""), reverse=True
+        )
         return [ProjectFileOut(**f) for f in files_sorted]
 
 
@@ -533,18 +549,26 @@ async def upload_project_files(project_id: str, files: List[UploadFile] = File(.
             continue
         data = await upload.read()
         if not data:
-            raise HTTPException(status_code=400, detail=f"File {upload.filename} is empty.")
+            raise HTTPException(
+                status_code=400, detail=f"File {upload.filename} is empty."
+            )
         # 25 MB limit per file (backend also limited by proxy)
         if len(data) > 25 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail=f"{upload.filename} exceeds 25 MB.")
+            raise HTTPException(
+                status_code=400, detail=f"{upload.filename} exceeds 25 MB."
+            )
 
         stream_info = StreamInfo(filename=upload.filename)
         try:
-            result = _markitdown.convert_stream(io.BytesIO(data), stream_info=stream_info)
+            result = _markitdown.convert_stream(
+                io.BytesIO(data), stream_info=stream_info
+            )
         except MarkItDownException as e:
             raise HTTPException(status_code=422, detail=f"{upload.filename}: {e}")
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"{upload.filename}: conversion failed: {e}")
+            raise HTTPException(
+                status_code=500, detail=f"{upload.filename}: conversion failed: {e}"
+            )
 
         rec = {
             "id": uuid.uuid4().hex[:10],
