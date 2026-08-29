@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import Header from "../components/Header";
 
 const API_BASE = "http://localhost:8000";
 
@@ -48,6 +50,9 @@ const ghostButton =
   "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] text-zinc-900 transition-colors hover:bg-zinc-100";
 
 function Playground() {
+  const [searchParams] = useSearchParams();
+  const projectId = searchParams.get("project");
+
   const [mode, setMode] = useState<Mode>("convert");
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -63,7 +68,45 @@ function Playground() {
   const [selectedChunk, setSelectedChunk] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  const [projectName, setProjectName] = useState<string | null>(null);
+  const [projectNotice, setProjectNotice] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // If ?project= is present, fetch project defaults and prefill
+  useEffect(() => {
+    if (!projectId) {
+      setProjectName(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/projects/${projectId}`);
+        if (!res.ok) throw new Error();
+        const p = await res.json();
+        if (cancelled) return;
+        setProjectName(p.name);
+        if (p.chunk_strategy) {
+          setChunkStrategy(p.chunk_strategy as ChunkStrategy);
+          setMode("chunk");
+        }
+        if (p.chunk_size) setChunkSize(p.chunk_size);
+        if (typeof p.chunk_overlap === "number") setChunkOverlap(p.chunk_overlap);
+        if (p.chunk_model) setChunkModel(p.chunk_model);
+        setProjectNotice(`Loaded defaults from “${p.name}”`);
+        // auto-clear notice after 4s
+        setTimeout(() => {
+          if (!cancelled) setProjectNotice(null);
+        }, 4000);
+      } catch {
+        if (!cancelled) setProjectName(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const convertFile = useCallback(
     async (file: File) => {
@@ -101,13 +144,17 @@ function Playground() {
         const data: ConvertResponse = await response.json();
         setResult(data);
         setViewMode(data.chunks ? "chunks" : "markdown");
+        // If inside a project, bump its file_count / updated_at
+        if (projectId) {
+          void fetch(`${API_BASE}/api/projects/${projectId}/touch`, { method: "POST" }).catch(() => {});
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Conversion failed.");
       } finally {
         setIsLoading(false);
       }
     },
-    [mode, chunkStrategy, chunkSize, chunkOverlap, chunkModel]
+    [mode, chunkStrategy, chunkSize, chunkOverlap, chunkModel, projectId]
   );
 
   const selectFile = useCallback((file: File) => {
@@ -189,11 +236,52 @@ function Playground() {
 
   return (
     <div className="flex min-h-screen flex-col bg-white text-sm text-zinc-900">
-      <div className="flex items-center gap-4 border-b border-zinc-200 px-6 py-3.5">
-        <span className="text-[0.95rem] font-semibold tracking-tight">Momo</span>
-      </div>
+      <Header />
 
       <main className="mx-auto flex w-full max-w-[960px] flex-1 flex-col gap-4 p-6">
+        {/* Project context banner */}
+        {projectId && projectName && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-900 bg-zinc-900 px-4 py-3 text-white">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <div>
+                <div className="text-xs font-medium leading-none">Project: {projectName}</div>
+                <div className="text-[11px] leading-none text-zinc-400">Defaults pre-filled from project settings</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                to={`/project/${projectId}`}
+                className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-zinc-100"
+              >
+                View project
+              </Link>
+              <Link
+                to="/playground"
+                className="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10"
+              >
+                Clear
+              </Link>
+            </div>
+          </div>
+        )}
+        {projectId && !projectName && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+            Project <span className="font-mono">{projectId}</span> not found — using global defaults.{" "}
+            <Link to="/project" className="font-medium underline hover:text-amber-900">
+              Browse projects
+            </Link>
+          </div>
+        )}
+        {projectNotice && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+            {projectNotice}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-0.5">
             <button className={tabButton(mode === "convert")} onClick={() => setMode("convert")}>
