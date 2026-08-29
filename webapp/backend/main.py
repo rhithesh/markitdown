@@ -162,6 +162,135 @@ def health():
     return {"status": "ok"}
 
 
+_TOKENIZER_FILE_MARKERS = (
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "vocab.txt",
+    "spiece.model",
+)
+
+
+class TokenizerCheckOut(BaseModel):
+    valid: bool
+    source: Optional[str] = None  # "tiktoken" | "huggingface"
+    message: str
+
+
+# Common OpenAI model names tiktoken recognizes -- these aren't on the
+# Hugging Face Hub, so they can't come from the search API below and are
+# matched server-side by substring instead. Not exhaustive (tiktoken also
+# knows long-deprecated names like text-davinci-003); this is the
+# actively-used subset worth suggesting.
+OPENAI_MODEL_PRESETS = (
+    "gpt-5",
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+    "gpt-4",
+    "gpt-3.5-turbo",
+    "gpt2",
+    "o1",
+    "o3",
+    "o4-mini",
+    "text-embedding-3-small",
+    "text-embedding-3-large",
+    "text-embedding-ada-002",
+)
+
+
+class ModelSearchResult(BaseModel):
+    id: str
+    downloads: Optional[int] = None
+
+
+class ModelSearchOut(BaseModel):
+    openai: List[str]
+    huggingface: List[ModelSearchResult]
+
+
+@app.get("/api/model-search", response_model=ModelSearchOut)
+def model_search(q: str = "", limit: int = 8):
+    q = q.strip()
+    openai_matches = [m for m in OPENAI_MODEL_PRESETS if q.lower() in m.lower()][:5]
+
+    hf_matches: List[ModelSearchResult] = []
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        # Over-fetch since we filter down to repos that actually publish
+        # tokenizer files, then trim to `limit`.
+        candidates = api.list_models(
+            search=q or None,
+            limit=limit * 3,
+            sort="downloads",
+            expand=["siblings"],
+        )
+        for m in candidates:
+            siblings = {s.rfilename for s in (m.siblings or [])}
+            if siblings & set(_TOKENIZER_FILE_MARKERS):
+                hf_matches.append(ModelSearchResult(id=m.id, downloads=m.downloads))
+            if len(hf_matches) >= limit:
+                break
+    except Exception:
+        # Search is best-effort; an empty result just means no suggestions.
+        pass
+
+    return ModelSearchOut(openai=openai_matches, huggingface=hf_matches)
+
+
+@app.get("/api/tokenizer-check", response_model=TokenizerCheckOut)
+def tokenizer_check(model: str):
+    model = model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required.")
+
+    try:
+        import tiktoken
+
+        tiktoken.encoding_for_model(model)
+        return TokenizerCheckOut(
+            valid=True, source="tiktoken", message="Recognized OpenAI model."
+        )
+    except Exception:
+        pass
+
+    try:
+        from huggingface_hub import HfApi
+        from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+
+        info = HfApi().model_info(model, files_metadata=False)
+        has_tokenizer = any(
+            s.rfilename in _TOKENIZER_FILE_MARKERS for s in (info.siblings or [])
+        )
+        if has_tokenizer:
+            return TokenizerCheckOut(
+                valid=True,
+                source="huggingface",
+                message="Tokenizer found on Hugging Face.",
+            )
+        return TokenizerCheckOut(
+            valid=False,
+            message="This model repo exists but doesn't publish tokenizer files.",
+        )
+    except GatedRepoError:
+        return TokenizerCheckOut(
+            valid=False,
+            message="This is a gated model — authenticate with HF_TOKEN to use it.",
+        )
+    except RepositoryNotFoundError:
+        return TokenizerCheckOut(
+            valid=False, message="No such model found on Hugging Face."
+        )
+    except Exception:
+        return TokenizerCheckOut(
+            valid=False,
+            message="Couldn't verify this model (network issue or invalid name).",
+        )
+
+
 @app.post("/api/convert", response_model=ConvertResponse)
 async def convert(
     file: UploadFile = File(...),

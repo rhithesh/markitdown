@@ -1,12 +1,47 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import Header from "../components/Header";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 const API_BASE = "http://localhost:8000";
 
 type ChunkStrategy = "character" | "recursive" | "token";
 type Mode = "convert" | "chunk";
 type ViewMode = "markdown" | "chunks" | "json";
+
+interface ModelSearchResult {
+  id: string;
+  downloads: number | null;
+}
+
+interface ModelSearchResponse {
+  openai: string[];
+  huggingface: ModelSearchResult[];
+}
+
+function formatDownloads(n: number | null): string | null {
+  if (!n) return null;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M downloads`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k downloads`;
+  return `${n} downloads`;
+}
 
 interface Chunk {
   text: string;
@@ -26,28 +61,10 @@ function formatBytes(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M chars`;
 }
 
-const tabButton = (active: boolean) =>
-  `px-3 py-1.5 rounded-md text-[13px] transition-colors ${
-    active
-      ? "bg-white text-zinc-900 shadow-sm"
-      : "text-zinc-500 hover:text-zinc-900"
-  }`;
-
-const viewToggleButton = (active: boolean) =>
-  `px-2.5 py-1.5 text-[13px] border-r border-zinc-200 last:border-r-0 transition-colors ${
-    active ? "bg-zinc-900 text-white" : "text-zinc-500 hover:text-zinc-900"
-  }`;
-
 const chunkListItem = (active: boolean) =>
   `flex w-full items-baseline gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors ${
-    active ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-100"
+    active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
   }`;
-
-const inputClass =
-  "min-w-[130px] rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 focus:border-indigo-600 focus:outline-none";
-
-const ghostButton =
-  "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[13px] text-zinc-900 transition-colors hover:bg-zinc-100";
 
 function Playground() {
   const [searchParams] = useSearchParams();
@@ -63,6 +80,23 @@ function Playground() {
   const [chunkSize, setChunkSize] = useState(1000);
   const [chunkOverlap, setChunkOverlap] = useState(200);
   const [chunkModel, setChunkModel] = useState("");
+
+  const [tokenizerStatus, setTokenizerStatus] = useState<
+    "idle" | "checking" | "valid" | "invalid"
+  >("idle");
+  const [tokenizerMessage, setTokenizerMessage] = useState<string | null>(null);
+
+  const [modelResults, setModelResults] = useState<ModelSearchResponse>({
+    openai: [],
+    huggingface: [],
+  });
+  const [modelSearchLoading, setModelSearchLoading] = useState(false);
+  const [modelListOpen, setModelListOpen] = useState(false);
+  // Tracks a value just chosen from the suggestion list so the search effect
+  // below can skip re-querying it as free text -- searching a full repo id
+  // like "google-bert/bert-base-uncased" as a fuzzy string surfaces noisy
+  // near-duplicate forks instead of the handful of results the user already saw.
+  const lastSelectedModelRef = useRef<string | null>(null);
 
   const [viewMode, setViewMode] = useState<ViewMode>("markdown");
   const [selectedChunk, setSelectedChunk] = useState(0);
@@ -93,7 +127,10 @@ function Playground() {
         }
         if (p.chunk_size) setChunkSize(p.chunk_size);
         if (typeof p.chunk_overlap === "number") setChunkOverlap(p.chunk_overlap);
-        if (p.chunk_model) setChunkModel(p.chunk_model);
+        if (p.chunk_model) {
+          lastSelectedModelRef.current = p.chunk_model;
+          setChunkModel(p.chunk_model);
+        }
         setProjectNotice(`Loaded defaults from “${p.name}”`);
         // auto-clear notice after 4s
         setTimeout(() => {
@@ -107,6 +144,73 @@ function Playground() {
       cancelled = true;
     };
   }, [projectId]);
+
+  // Debounced check that the entered model name has a resolvable tokenizer
+  // (tiktoken or Hugging Face) before the user hits convert.
+  useEffect(() => {
+    if (mode !== "chunk" || chunkStrategy !== "token" || !chunkModel.trim()) {
+      setTokenizerStatus("idle");
+      setTokenizerMessage(null);
+      return;
+    }
+    let cancelled = false;
+    setTokenizerStatus("checking");
+    setTokenizerMessage(null);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/tokenizer-check?model=${encodeURIComponent(chunkModel.trim())}`
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        setTokenizerStatus(data.valid ? "valid" : "invalid");
+        setTokenizerMessage(data.message);
+      } catch {
+        if (!cancelled) {
+          setTokenizerStatus("idle");
+          setTokenizerMessage(null);
+        }
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mode, chunkStrategy, chunkModel]);
+
+  // Debounced model-name search against the backend (tiktoken presets +
+  // live Hugging Face lookup) to populate suggestions as the user types.
+  useEffect(() => {
+    if (mode !== "chunk" || chunkStrategy !== "token") {
+      setModelResults({ openai: [], huggingface: [] });
+      return;
+    }
+    const query = chunkModel.trim();
+    // Just picked this exact value from the list below -- leave the results
+    // as they were rather than re-searching the full id as free text.
+    if (query && query === lastSelectedModelRef.current) {
+      return;
+    }
+    let cancelled = false;
+    setModelSearchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/model-search?q=${encodeURIComponent(query)}&limit=8`
+        );
+        const data: ModelSearchResponse = await res.json();
+        if (!cancelled) setModelResults(data);
+      } catch {
+        if (!cancelled) setModelResults({ openai: [], huggingface: [] });
+      } finally {
+        if (!cancelled) setModelSearchLoading(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mode, chunkStrategy, chunkModel]);
 
   const convertFile = useCallback(
     async (file: File) => {
@@ -235,37 +339,31 @@ function Playground() {
     : [];
 
   return (
-    <div className="flex min-h-screen flex-col bg-white text-sm text-zinc-900">
+    <div className="flex min-h-screen flex-col bg-background text-sm text-foreground">
       <Header />
 
       <main className="mx-auto flex w-full max-w-[960px] flex-1 flex-col gap-4 p-6">
         {/* Project context banner */}
         {projectId && projectName && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-900 bg-zinc-900 px-4 py-3 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary bg-primary px-4 py-3 text-primary-foreground">
             <div className="flex items-center gap-2.5">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white/10">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-foreground/10">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
                   <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" strokeLinejoin="round" />
                 </svg>
               </span>
               <div>
                 <div className="text-xs font-medium leading-none">Project: {projectName}</div>
-                <div className="text-[11px] leading-none text-zinc-400">Defaults pre-filled from project settings</div>
+                <div className="text-[11px] leading-none text-primary-foreground/70">Defaults pre-filled from project settings</div>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Link
-                to={`/project/${projectId}`}
-                className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-zinc-100"
-              >
-                View project
-              </Link>
-              <Link
-                to="/playground"
-                className="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10"
-              >
-                Clear
-              </Link>
+              <Button size="sm" variant="secondary" asChild>
+                <Link to={`/project/${projectId}`}>View project</Link>
+              </Button>
+              <Button size="sm" variant="outline" className="border-primary-foreground/20 bg-transparent text-primary-foreground hover:bg-primary-foreground/10" asChild>
+                <Link to="/playground">Clear</Link>
+              </Button>
             </div>
           </div>
         )}
@@ -283,43 +381,42 @@ function Playground() {
           </div>
         )}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-0.5">
-            <button className={tabButton(mode === "convert")} onClick={() => setMode("convert")}>
-              Convert
-            </button>
-            <button className={tabButton(mode === "chunk")} onClick={() => setMode("chunk")}>
-              Convert + Chunk
-            </button>
-          </div>
+          <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
+            <TabsList>
+              <TabsTrigger value="convert">Convert</TabsTrigger>
+              <TabsTrigger value="chunk">Convert + Chunk</TabsTrigger>
+            </TabsList>
+          </Tabs>
 
           {mode === "chunk" && (
             <>
-              <label className="flex items-center gap-2 text-xs text-zinc-500">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Strategy</span>
-                <select
-                  className={inputClass}
-                  value={chunkStrategy}
-                  onChange={(e) => setChunkStrategy(e.target.value as ChunkStrategy)}
-                >
-                  <option value="character">Character</option>
-                  <option value="recursive">Recursive</option>
-                  <option value="token">Token</option>
-                </select>
+                <Select value={chunkStrategy} onValueChange={(v) => setChunkStrategy(v as ChunkStrategy)}>
+                  <SelectTrigger size="sm" className="min-w-[130px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="character">Character</SelectItem>
+                    <SelectItem value="recursive">Recursive</SelectItem>
+                    <SelectItem value="token">Token</SelectItem>
+                  </SelectContent>
+                </Select>
               </label>
-              <label className="flex items-center gap-2 text-xs text-zinc-500">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Chunk size</span>
-                <input
-                  className={`${inputClass} w-24 min-w-0`}
+                <Input
+                  className="w-24 min-w-0"
                   type="number"
                   min={1}
                   value={chunkSize}
                   onChange={(e) => setChunkSize(Number(e.target.value))}
                 />
               </label>
-              <label className="flex items-center gap-2 text-xs text-zinc-500">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Overlap</span>
-                <input
-                  className={`${inputClass} w-24 min-w-0`}
+                <Input
+                  className="w-24 min-w-0"
                   type="number"
                   min={0}
                   value={chunkOverlap}
@@ -331,23 +428,91 @@ function Playground() {
         </div>
 
         {mode === "chunk" && chunkStrategy === "token" && (
-          <section className="flex flex-wrap gap-5 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3.5">
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          <section className="flex flex-wrap gap-5 rounded-lg border  px-4 py-3.5">
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               <span>Model</span>
-              <input
-                className={inputClass}
-                type="text"
-                placeholder="gpt-4o"
-                value={chunkModel}
-                onChange={(e) => setChunkModel(e.target.value)}
-              />
+              <Command
+                shouldFilter={false}
+                className="relative w-[380px] overflow-visible   bg-transparent "
+              >
+                <CommandInput
+                  placeholder="Search or type a model name…"
+                  value={chunkModel}
+                  onValueChange={(v) => {
+                    setChunkModel(v);
+                    setModelListOpen(true);
+                  }}
+                  onFocus={() => setModelListOpen(true)}
+                  onClick={() => setModelListOpen(true)}
+                  onBlur={() => setTimeout(() => setModelListOpen(false), 150)}
+                  aria-invalid={tokenizerStatus === "invalid"}
+                />
+                {modelListOpen && (
+                  <CommandList className="absolute inset-x-0 top-full z-50 mt-1 rounded-lg border bg-popover shadow-md">
+                    {modelSearchLoading && (
+                      <div className="flex items-center gap-1.5 px-2 py-3 text-xs text-muted-foreground">
+                        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                        Searching…
+                      </div>
+                    )}
+                    {!modelSearchLoading &&
+                      modelResults.openai.length === 0 &&
+                      modelResults.huggingface.length === 0 && (
+                        <CommandEmpty>
+                          No matching models — your typed name will be used as-is.
+                        </CommandEmpty>
+                      )}
+                    {modelResults.openai.length > 0 && (
+                      <CommandGroup heading="OpenAI (tiktoken)">
+                        {modelResults.openai.map((id) => (
+                          <CommandItem
+                            key={id}
+                            value={id}
+                            onSelect={(v) => {
+                              lastSelectedModelRef.current = v;
+                              setChunkModel(v);
+                              setModelListOpen(false);
+                            }}
+                            data-checked={chunkModel === id}
+                          >
+                            {id}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {modelResults.huggingface.length > 0 && (
+                      <CommandGroup heading="Hugging Face">
+                        {modelResults.huggingface.map((m) => (
+                          <CommandItem
+                            key={m.id}
+                            value={m.id}
+                            onSelect={(v) => {
+                              lastSelectedModelRef.current = v;
+                              setChunkModel(v);
+                              setModelListOpen(false);
+                            }}
+                            data-checked={chunkModel === m.id}
+                          >
+                            <span className="truncate">{m.id}</span>
+                            {formatDownloads(m.downloads) && (
+                              <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                                {formatDownloads(m.downloads)}
+                              </span>
+                            )}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                )}
+              </Command>
             </label>
           </section>
         )}
 
         <div
-          className={`flex cursor-pointer flex-col items-center justify-center gap-2.5 rounded-lg border border-dashed text-center text-zinc-500 transition-colors hover:border-black hover:bg-zinc-50 ${
-            isDragging ? "border-solid border-black bg-zinc-50" : "border-zinc-300"
+          className={`flex cursor-pointer flex-col items-center justify-center gap-2.5 rounded-lg border border-dashed text-center text-muted-foreground transition-colors hover:border-foreground hover:bg-muted/40 ${
+            isDragging ? "border-solid border-foreground bg-muted/40" : ""
           } ${result ? "flex-row gap-2 px-4 py-2.5" : "px-6 py-11"}`}
           onDragOver={(e) => {
             e.preventDefault();
@@ -361,7 +526,7 @@ function Playground() {
         >
           <input ref={fileInputRef} type="file" hidden onChange={handleFileInputChange} />
           <svg
-            className="text-zinc-400"
+            className="text-muted-foreground"
             width={result ? 16 : 20}
             height={result ? 16 : 20}
             viewBox="0 0 24 24"
@@ -387,16 +552,17 @@ function Playground() {
           </p>
         </div>
 
-        <button
-          className="self-start rounded-md bg-zinc-900 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
-          disabled={!selectedFile || isLoading}
+        <Button
+          className="self-start"
+          disabled={!selectedFile || isLoading || tokenizerStatus === "invalid"}
           onClick={handleConvertClick}
+          title={tokenizerStatus === "invalid" ? tokenizerMessage ?? undefined : undefined}
         >
           Momo
-        </button>
+        </Button>
 
         {error && (
-          <div className="whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-700">
+          <div className="whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
@@ -423,10 +589,10 @@ function Playground() {
                 <h2 className="mb-1 break-words text-base font-semibold">
                   {result.title || result.filename}
                 </h2>
-                <div className="flex gap-2.5 text-xs text-zinc-500">
+                <div className="flex gap-2.5 text-xs text-muted-foreground">
                   {stats.map((s, i) => (
                     <span key={s}>
-                      {i > 0 && <span className="mr-2.5 text-zinc-400">·</span>}
+                      {i > 0 && <span className="mr-2.5 text-muted-foreground/50">·</span>}
                       {s}
                     </span>
                   ))}
@@ -434,45 +600,32 @@ function Playground() {
               </div>
               <div className="flex items-center gap-2">
                 {result.chunks && (
-                  <div className="flex overflow-hidden rounded-md border border-zinc-200">
-                    <button
-                      className={viewToggleButton(viewMode === "markdown")}
-                      onClick={() => setViewMode("markdown")}
-                    >
-                      Markdown
-                    </button>
-                    <button
-                      className={viewToggleButton(viewMode === "chunks")}
-                      onClick={() => setViewMode("chunks")}
-                    >
-                      Chunks
-                    </button>
-                    <button
-                      className={viewToggleButton(viewMode === "json")}
-                      onClick={() => setViewMode("json")}
-                    >
-                      JSON
-                    </button>
-                  </div>
+                  <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)}>
+                    <TabsList>
+                      <TabsTrigger value="markdown">Markdown</TabsTrigger>
+                      <TabsTrigger value="chunks">Chunks</TabsTrigger>
+                      <TabsTrigger value="json">JSON</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
                 )}
-                <button className={ghostButton} onClick={handleCopy}>
+                <Button variant="outline" size="sm" onClick={handleCopy}>
                   Copy
-                </button>
-                <button className={ghostButton} onClick={handleDownload}>
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleDownload}>
                   Download
-                </button>
+                </Button>
               </div>
             </div>
 
             {(viewMode === "markdown" || !result.chunks) && (
-              <pre className="m-0 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-[13px] leading-relaxed text-zinc-900">
+              <pre className="m-0 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-4 font-mono text-[13px] leading-relaxed text-foreground">
                 {result.markdown}
               </pre>
             )}
 
             {viewMode === "chunks" && result.chunks && (
               <div className="grid h-[65vh] grid-cols-[220px_1fr] gap-3">
-                <div className="flex flex-col gap-0.5 overflow-y-auto rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+                <div className="flex flex-col gap-0.5 overflow-y-auto rounded-lg border bg-muted/40 p-1">
                   {result.chunks.map((chunk, i) => (
                     <button
                       key={i}
@@ -489,15 +642,15 @@ function Playground() {
                 <div className="flex min-w-0 flex-col gap-2">
                   {result.chunks[selectedChunk] && (
                     <>
-                      <div className="flex flex-wrap gap-3.5 text-xs text-zinc-500">
+                      <div className="flex flex-wrap gap-3.5 text-xs text-muted-foreground">
                         {Object.entries(result.chunks[selectedChunk].metadata).map(([k, v]) => (
                           <span key={k}>
-                            <b className="mr-1 font-medium text-zinc-400">{k}</b>
+                            <b className="mr-1 font-medium text-muted-foreground/70">{k}</b>
                             {String(v)}
                           </span>
                         ))}
                       </div>
-                      <pre className="m-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-[13px] leading-relaxed text-zinc-900">
+                      <pre className="m-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-4 font-mono text-[13px] leading-relaxed text-foreground">
                         {result.chunks[selectedChunk].text}
                       </pre>
                     </>
@@ -507,7 +660,7 @@ function Playground() {
             )}
 
             {viewMode === "json" && result.chunks && (
-              <pre className="m-0 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-[13px] leading-relaxed text-zinc-900">
+              <pre className="m-0 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-4 font-mono text-[13px] leading-relaxed text-foreground">
                 {JSON.stringify(result.chunks, null, 2)}
               </pre>
             )}
@@ -515,13 +668,13 @@ function Playground() {
         )}
       </main>
 
-      <footer className="border-t border-zinc-200 px-6 py-4 text-center text-xs text-zinc-400">
+      <footer className="border-t px-6 py-4 text-center text-xs text-muted-foreground">
         Built by{" "}
         <a
           href="https://www.hithesh.xyz/"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-900"
+          className="text-foreground/70 underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground"
         >
           hithesh.xyz
         </a>
