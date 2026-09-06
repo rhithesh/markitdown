@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+# SQLite database (created at runtime; seeded from data/projects.json on first run)
+data/app.db
+data/app.db-wal
+data/app.db-shm
+data/.migrated-to-sqlite

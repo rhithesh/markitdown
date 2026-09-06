@@ -5,7 +5,9 @@ Drag-and-drop file conversion in the browser, backed by the local (editable)
 
 - `backend/` -- FastAPI, converts uploads via `MarkItDown().convert_stream()`
   and optionally chunks the result (`character`, `recursive`, or `token`
-  strategy).
+  strategy). Projects and their converted files are stored in SQLite at
+  `backend/data/app.db` (see `backend/db.py`); on first run it imports any
+  existing `backend/data/projects.json` from the old file-backed store.
 - `frontend/` -- React + Vite, drag-and-drop upload, markdown/chunk viewer,
   copy/download.
 
