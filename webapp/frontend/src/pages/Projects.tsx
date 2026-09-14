@@ -15,8 +15,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-
-const API_BASE = "http://localhost:8000";
+import { apiFetch, API_BASE } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -63,7 +62,7 @@ export default function Projects() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/projects`);
+      const res = await apiFetch(`/api/projects`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Failed to load projects (${res.status})`);
@@ -109,7 +108,7 @@ export default function Projects() {
         name: name.trim(),
         description: description.trim() || null,
       };
-      const res = await fetch(`${API_BASE}/api/projects`, {
+      const res = await apiFetch(`/api/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -135,7 +134,7 @@ export default function Projects() {
       if (!confirm("Delete this project? This cannot be undone.")) return;
       setDeletingId(id);
       try {
-        const res = await fetch(`${API_BASE}/api/projects/${id}`, {
+        const res = await apiFetch(`/api/projects/${id}`, {
           method: "DELETE",
         });
         if (!res.ok && res.status !== 204) {

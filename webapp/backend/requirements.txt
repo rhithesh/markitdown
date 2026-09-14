@@ -1,4 +1,6 @@
 fastapi
 uvicorn[standard]
 python-multipart
+pyjwt
+bcrypt
 -e ../../packages/markitdown[all]

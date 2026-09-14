@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS project_files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files (project_id);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
 """
 
 # Every project read goes through this so ``file_count`` is always accurate.
@@ -342,3 +349,48 @@ def delete_file(project_id: str, file_id: str) -> bool:
             (now_iso(), project_id),
         )
         return True
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+# Single-user app: there is at most one row in this table. See webapp/backend
+# /auth.py for the login/registration flow that enforces that.
+
+
+class DuplicateUser(Exception):
+    """Raised when an account already exists (registration is one-time only)."""
+
+
+def has_any_user() -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+    return row is not None
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash, created_at FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_user(username: str, password_hash: str) -> dict:
+    if has_any_user():
+        raise DuplicateUser("An account already exists.")
+    user_id = new_id()
+    now = now_iso()
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO users (id, username, password_hash, created_at) "
+                "VALUES (?,?,?,?)",
+                (user_id, username, password_hash, now),
+            )
+    except sqlite3.IntegrityError:
+        raise DuplicateUser("An account already exists.")
+    result = get_user_by_username(username)
+    assert result is not None
+    return result

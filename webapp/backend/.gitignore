@@ -6,3 +6,6 @@ data/app.db
 data/app.db-wal
 data/app.db-shm
 data/.migrated-to-sqlite
+
+# Generated JWT signing secret (see auth.py) -- a per-install credential, not code.
+data/.jwt_secret

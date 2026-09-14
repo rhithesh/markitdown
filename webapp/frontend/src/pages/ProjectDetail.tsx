@@ -7,8 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card } from "@/components/ui/card";
-
-const API_BASE = "http://localhost:8000";
+import { apiFetch } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -78,7 +77,7 @@ export default function ProjectDetail() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/projects/${id}`);
+      const res = await apiFetch(`/api/projects/${id}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Failed to load project (${res.status})`);
@@ -99,7 +98,7 @@ export default function ProjectDetail() {
     setFilesLoading(true);
     setFilesError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/projects/${id}/files`);
+      const res = await apiFetch(`/api/projects/${id}/files`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Failed to load files (${res.status})`);
@@ -127,7 +126,7 @@ export default function ProjectDetail() {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/projects/${id}`, {
+      const res = await apiFetch(`/api/projects/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -154,7 +153,7 @@ export default function ProjectDetail() {
     if (!confirm("Delete this project? This cannot be undone.")) return;
     setDeleting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/projects/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/projects/${id}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Delete failed (${res.status})`);
@@ -180,7 +179,7 @@ export default function ProjectDetail() {
       try {
         const fd = new FormData();
         arr.forEach((f) => fd.append("files", f));
-        const res = await fetch(`${API_BASE}/api/projects/${id}/files`, {
+        const res = await apiFetch(`/api/projects/${id}/files`, {
           method: "POST",
           body: fd,
         });
@@ -207,7 +206,7 @@ export default function ProjectDetail() {
       if (!id) return;
       if (!confirm("Delete this file?")) return;
       try {
-        const res = await fetch(`${API_BASE}/api/projects/${id}/files/${fileId}`, { method: "DELETE" });
+        const res = await apiFetch(`/api/projects/${id}/files/${fileId}`, { method: "DELETE" });
         if (!res.ok && res.status !== 204) {
           const body = await res.json().catch(() => null);
           throw new Error(body?.detail ?? `Delete failed (${res.status})`);

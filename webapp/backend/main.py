@@ -9,7 +9,7 @@ working tree (chunking strategies, converters, etc).
 import io
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,17 +21,18 @@ from markitdown.chunking import (
 )
 from markitdown._exceptions import MarkItDownException
 
+import auth
 import db
 
 app = FastAPI(title="MarkItDown Web")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    # allow_credentials=True is incompatible with allow_origins=["*"] --
-    # browsers reject that combination outright. This app doesn't use
-    # cookies/auth, so credentials aren't needed.
-    allow_credentials=False,
+    # The auth cookie requires allow_credentials=True, which browsers refuse
+    # to combine with allow_origins=["*"] -- so the frontend's dev origin is
+    # listed explicitly instead.
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -109,6 +110,71 @@ def health():
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+# Single local user. First call to /api/auth/register claims the account;
+# every later call is rejected. See auth.py for token/cookie handling.
+
+
+class AuthCredentials(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class AuthStatusOut(BaseModel):
+    has_account: bool
+
+
+class AuthUserOut(BaseModel):
+    username: str
+
+
+@app.get("/api/auth/status", response_model=AuthStatusOut)
+def auth_status():
+    return AuthStatusOut(has_account=db.has_any_user())
+
+
+@app.post("/api/auth/register", response_model=AuthUserOut, status_code=201)
+def auth_register(payload: AuthCredentials, response: Response):
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+
+    try:
+        db.create_user(username, auth.hash_password(payload.password))
+    except db.DuplicateUser:
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists. Log in instead.",
+        )
+
+    auth.set_auth_cookie(response, username)
+    return AuthUserOut(username=username)
+
+
+@app.post("/api/auth/login", response_model=AuthUserOut)
+def auth_login(payload: AuthCredentials, response: Response):
+    username = payload.username.strip()
+    user = db.get_user_by_username(username)
+    if not user or not auth.verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    auth.set_auth_cookie(response, username)
+    return AuthUserOut(username=username)
+
+
+@app.post("/api/auth/logout", status_code=204)
+def auth_logout(response: Response):
+    auth.clear_auth_cookie(response)
+    return None
+
+
+@app.get("/api/auth/me", response_model=AuthUserOut)
+def auth_me(username: str = Depends(auth.get_current_user)):
+    return AuthUserOut(username=username)
+
+
 _TOKENIZER_FILE_MARKERS = (
     "tokenizer.json",
     "tokenizer_config.json",
@@ -158,7 +224,7 @@ class ModelSearchOut(BaseModel):
 
 
 @app.get("/api/model-search", response_model=ModelSearchOut)
-def model_search(q: str = "", limit: int = 8):
+def model_search(q: str = "", limit: int = 8, _auth: str = Depends(auth.get_current_user)):
     q = q.strip()
     openai_matches = [m for m in OPENAI_MODEL_PRESETS if q.lower() in m.lower()][:5]
 
@@ -189,7 +255,7 @@ def model_search(q: str = "", limit: int = 8):
 
 
 @app.get("/api/tokenizer-check", response_model=TokenizerCheckOut)
-def tokenizer_check(model: str):
+def tokenizer_check(model: str, _auth: str = Depends(auth.get_current_user)):
     model = model.strip()
     if not model:
         raise HTTPException(status_code=400, detail="model is required.")
@@ -245,6 +311,7 @@ async def convert(
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: int = Form(0),
     chunk_model: Optional[str] = Form(None),
+    _auth: str = Depends(auth.get_current_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
@@ -311,12 +378,12 @@ async def convert(
 
 
 @app.get("/api/projects", response_model=List[ProjectOut])
-def list_projects():
+def list_projects(_auth: str = Depends(auth.get_current_user)):
     return [ProjectOut(**p) for p in db.list_projects()]
 
 
 @app.post("/api/projects", response_model=ProjectOut, status_code=201)
-def create_project(payload: ProjectCreate):
+def create_project(payload: ProjectCreate, _auth: str = Depends(auth.get_current_user)):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required.")
@@ -364,7 +431,7 @@ def create_project(payload: ProjectCreate):
 
 
 @app.get("/api/projects/{project_id}", response_model=ProjectOut)
-def get_project(project_id: str):
+def get_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
     project = db.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
@@ -372,7 +439,9 @@ def get_project(project_id: str):
 
 
 @app.patch("/api/projects/{project_id}", response_model=ProjectOut)
-def update_project(project_id: str, payload: ProjectUpdate):
+def update_project(
+    project_id: str, payload: ProjectUpdate, _auth: str = Depends(auth.get_current_user)
+):
     if not db.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -424,7 +493,7 @@ def update_project(project_id: str, payload: ProjectUpdate):
 
 
 @app.post("/api/projects/{project_id}/touch", response_model=ProjectOut)
-def touch_project(project_id: str):
+def touch_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
     """Bump updated_at so the project surfaces as recently used. The Playground
     pings this after a conversion. (It no longer bumps a file count -- only
     real uploads via the /files endpoint do that.)"""
@@ -438,14 +507,18 @@ def touch_project(project_id: str):
 
 
 @app.get("/api/projects/{project_id}/files", response_model=List[ProjectFileOut])
-def list_project_files(project_id: str):
+def list_project_files(project_id: str, _auth: str = Depends(auth.get_current_user)):
     if not db.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found.")
     return [ProjectFileOut(**f) for f in db.list_files(project_id)]
 
 
 @app.post("/api/projects/{project_id}/files", response_model=List[ProjectFileOut])
-async def upload_project_files(project_id: str, files: List[UploadFile] = File(...)):
+async def upload_project_files(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    _auth: str = Depends(auth.get_current_user),
+):
     if not db.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found.")
     if not files:
@@ -499,7 +572,9 @@ async def upload_project_files(project_id: str, files: List[UploadFile] = File(.
 
 
 @app.delete("/api/projects/{project_id}/files/{file_id}", status_code=204)
-def delete_project_file(project_id: str, file_id: str):
+def delete_project_file(
+    project_id: str, file_id: str, _auth: str = Depends(auth.get_current_user)
+):
     if not db.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found.")
     if not db.delete_file(project_id, file_id):
@@ -508,7 +583,7 @@ def delete_project_file(project_id: str, file_id: str):
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)
-def delete_project(project_id: str):
+def delete_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
     if not db.delete_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found.")
     return None
