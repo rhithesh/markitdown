@@ -19,8 +19,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-
-const API_BASE = "http://localhost:8000";
+import { apiFetch } from "@/lib/api";
 
 type ChunkStrategy = "character" | "recursive" | "token";
 type Mode = "convert" | "chunk";
@@ -116,7 +115,7 @@ function Playground() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/projects/${projectId}`);
+        const res = await apiFetch(`/api/projects/${projectId}`);
         if (!res.ok) throw new Error();
         const p = await res.json();
         if (cancelled) return;
@@ -158,8 +157,8 @@ function Playground() {
     setTokenizerMessage(null);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/api/tokenizer-check?model=${encodeURIComponent(chunkModel.trim())}`
+        const res = await apiFetch(
+          `/api/tokenizer-check?model=${encodeURIComponent(chunkModel.trim())}`
         );
         const data = await res.json();
         if (cancelled) return;
@@ -195,8 +194,8 @@ function Playground() {
     setModelSearchLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/api/model-search?q=${encodeURIComponent(query)}&limit=8`
+        const res = await apiFetch(
+          `/api/model-search?q=${encodeURIComponent(query)}&limit=8`
         );
         const data: ModelSearchResponse = await res.json();
         if (!cancelled) setModelResults(data);
@@ -233,7 +232,7 @@ function Playground() {
       }
 
       try {
-        const response = await fetch(`${API_BASE}/api/convert`, {
+        const response = await apiFetch(`/api/convert`, {
           method: "POST",
           body: formData,
         });
@@ -250,7 +249,7 @@ function Playground() {
         setViewMode(data.chunks ? "chunks" : "markdown");
         // If inside a project, bump its file_count / updated_at
         if (projectId) {
-          void fetch(`${API_BASE}/api/projects/${projectId}/touch`, { method: "POST" }).catch(() => {});
+          void apiFetch(`/api/projects/${projectId}/touch`, { method: "POST" }).catch(() => {});
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Conversion failed.");

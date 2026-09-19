@@ -1,11 +1,14 @@
 import { NavLink } from "react-router-dom";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   cn(buttonVariants({ variant: isActive ? "default" : "ghost", size: "sm" }));
 
 export default function Header() {
+  const { username, logout } = useAuth();
+
   return (
     <div className="flex items-center justify-between gap-4 border-b px-6 py-3.5">
       <div className="flex items-center gap-6">
@@ -19,14 +22,24 @@ export default function Header() {
           </NavLink>
         </nav>
       </div>
-      <a
-        href="https://github.com/microsoft/markitdown"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="hidden text-xs text-muted-foreground hover:text-foreground sm:block"
-      >
-        markitdown
-      </a>
+      <div className="flex items-center gap-4">
+        <a
+          href="https://github.com/microsoft/markitdown"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hidden text-xs text-muted-foreground hover:text-foreground sm:block"
+        >
+          markitdown
+        </a>
+        {username && (
+          <div className="flex items-center gap-2">
+            <span className="hidden text-xs text-muted-foreground sm:inline">{username}</span>
+            <Button variant="outline" size="sm" onClick={() => void logout()}>
+              Log out
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

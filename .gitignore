@@ -17,6 +17,10 @@ downloads/
 eggs/
 .eggs/
 lib/
+# The Python "lib/" rule above unintentionally also matches
+# webapp/frontend/src/lib/ (frontend source, not a Python build dir).
+!webapp/frontend/src/lib/
+!webapp/frontend/src/lib/**
 lib64/
 parts/
 sdist/

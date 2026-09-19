@@ -7,14 +7,9 @@ working tree (chunking strategies, converters, etc).
 """
 
 import io
-import json
-import threading
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -26,15 +21,18 @@ from markitdown.chunking import (
 )
 from markitdown._exceptions import MarkItDownException
 
+import auth
+import db
+
 app = FastAPI(title="MarkItDown Web")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    # allow_credentials=True is incompatible with allow_origins=["*"] --
-    # browsers reject that combination outright. This app doesn't use
-    # cookies/auth, so credentials aren't needed.
-    allow_credentials=False,
+    # The auth cookie requires allow_credentials=True, which browsers refuse
+    # to combine with allow_origins=["*"] -- so the frontend's dev origin is
+    # listed explicitly instead.
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,60 +43,9 @@ _markitdown = MarkItDown()
 
 CHUNK_STRATEGIES = {"character", "recursive", "token"}
 
-# ---------------------------------------------------------------------------
-# Projects persistence (file-backed, thread-safe)
-# ---------------------------------------------------------------------------
-_DATA_DIR = Path(__file__).parent / "data"
-_PROJECTS_FILE = _DATA_DIR / "projects.json"
-_projects_lock = threading.Lock()
-_projects_store: Dict[str, dict] = {}
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _load_projects() -> None:
-    if _PROJECTS_FILE.exists():
-        try:
-            raw = json.loads(_PROJECTS_FILE.read_text(encoding="utf-8"))
-            if isinstance(raw, list):
-                for p in raw:
-                    if isinstance(p, dict) and p.get("id"):
-                        # backward-compat: ensure new fields exist
-                        p.setdefault("files", [])
-                        p.setdefault("file_count", len(p.get("files", [])))
-                        _projects_store[p["id"]] = p
-            elif isinstance(raw, dict):
-                for pid, p in raw.items():
-                    if isinstance(p, dict):
-                        p.setdefault("files", [])
-                        p.setdefault("file_count", len(p.get("files", [])))
-                _projects_store.update(raw)
-        except Exception:
-            # Corrupt file -> start empty, don't crash boot
-            pass
-
-
-def _save_projects() -> None:
-    try:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # Persist as list sorted by created_at desc for readability
-        data = sorted(
-            _projects_store.values(),
-            key=lambda x: x.get("created_at", ""),
-            reverse=True,
-        )
-        _PROJECTS_FILE.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception:
-        # Best-effort persistence; don't fail request on fs error
-        pass
-
-
-# Load at import time
-_load_projects()
+# Projects/files live in SQLite (backend/data/app.db). See db.py. This also
+# imports any legacy data/projects.json on first run.
+db.init_db()
 
 
 class ChunkOut(BaseModel):
@@ -163,6 +110,71 @@ def health():
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+# Single local user. First call to /api/auth/register claims the account;
+# every later call is rejected. See auth.py for token/cookie handling.
+
+
+class AuthCredentials(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class AuthStatusOut(BaseModel):
+    has_account: bool
+
+
+class AuthUserOut(BaseModel):
+    username: str
+
+
+@app.get("/api/auth/status", response_model=AuthStatusOut)
+def auth_status():
+    return AuthStatusOut(has_account=db.has_any_user())
+
+
+@app.post("/api/auth/register", response_model=AuthUserOut, status_code=201)
+def auth_register(payload: AuthCredentials, response: Response):
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+
+    try:
+        db.create_user(username, auth.hash_password(payload.password))
+    except db.DuplicateUser:
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists. Log in instead.",
+        )
+
+    auth.set_auth_cookie(response, username)
+    return AuthUserOut(username=username)
+
+
+@app.post("/api/auth/login", response_model=AuthUserOut)
+def auth_login(payload: AuthCredentials, response: Response):
+    username = payload.username.strip()
+    user = db.get_user_by_username(username)
+    if not user or not auth.verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    auth.set_auth_cookie(response, username)
+    return AuthUserOut(username=username)
+
+
+@app.post("/api/auth/logout", status_code=204)
+def auth_logout(response: Response):
+    auth.clear_auth_cookie(response)
+    return None
+
+
+@app.get("/api/auth/me", response_model=AuthUserOut)
+def auth_me(username: str = Depends(auth.get_current_user)):
+    return AuthUserOut(username=username)
+
+
 _TOKENIZER_FILE_MARKERS = (
     "tokenizer.json",
     "tokenizer_config.json",
@@ -212,7 +224,7 @@ class ModelSearchOut(BaseModel):
 
 
 @app.get("/api/model-search", response_model=ModelSearchOut)
-def model_search(q: str = "", limit: int = 8):
+def model_search(q: str = "", limit: int = 8, _auth: str = Depends(auth.get_current_user)):
     q = q.strip()
     openai_matches = [m for m in OPENAI_MODEL_PRESETS if q.lower() in m.lower()][:5]
 
@@ -243,7 +255,7 @@ def model_search(q: str = "", limit: int = 8):
 
 
 @app.get("/api/tokenizer-check", response_model=TokenizerCheckOut)
-def tokenizer_check(model: str):
+def tokenizer_check(model: str, _auth: str = Depends(auth.get_current_user)):
     model = model.strip()
     if not model:
         raise HTTPException(status_code=400, detail="model is required.")
@@ -299,6 +311,7 @@ async def convert(
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: int = Form(0),
     chunk_model: Optional[str] = Form(None),
+    _auth: str = Depends(auth.get_current_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
@@ -365,18 +378,12 @@ async def convert(
 
 
 @app.get("/api/projects", response_model=List[ProjectOut])
-def list_projects():
-    with _projects_lock:
-        projects = sorted(
-            _projects_store.values(),
-            key=lambda x: x.get("created_at", ""),
-            reverse=True,
-        )
-        return [ProjectOut(**p) for p in projects]
+def list_projects(_auth: str = Depends(auth.get_current_user)):
+    return [ProjectOut(**p) for p in db.list_projects()]
 
 
 @app.post("/api/projects", response_model=ProjectOut, status_code=201)
-def create_project(payload: ProjectCreate):
+def create_project(payload: ProjectCreate, _auth: str = Depends(auth.get_current_user)):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required.")
@@ -396,146 +403,124 @@ def create_project(payload: ProjectCreate):
                 detail="chunk_size is required and must be > 0 when chunk_strategy is set.",
             )
 
-    now = _now_iso()
-    pid = uuid.uuid4().hex[:12]
+    if db.name_exists(name):
+        raise HTTPException(
+            status_code=409, detail=f'A project named "{name}" already exists.'
+        )
 
-    project = {
-        "id": pid,
-        "name": name,
-        "description": payload.description.strip() if payload.description else None,
-        "chunk_strategy": payload.chunk_strategy,
-        "chunk_size": payload.chunk_size,
-        "chunk_overlap": payload.chunk_overlap,
-        "chunk_model": payload.chunk_model.strip() if payload.chunk_model else None,
-        "created_at": now,
-        "updated_at": now,
-        "file_count": 0,
-        "files": [],
-    }
-
-    # Enforce unique name (case-insensitive)
-    with _projects_lock:
-        for p in _projects_store.values():
-            if p["name"].lower() == name.lower():
-                raise HTTPException(
-                    status_code=409, detail=f'A project named "{name}" already exists.'
-                )
-        _projects_store[pid] = project
-        _save_projects()
-
+    try:
+        project = db.create_project(
+            {
+                "name": name,
+                "description": payload.description.strip()
+                if payload.description
+                else None,
+                "chunk_strategy": payload.chunk_strategy,
+                "chunk_size": payload.chunk_size,
+                "chunk_overlap": payload.chunk_overlap,
+                "chunk_model": payload.chunk_model.strip()
+                if payload.chunk_model
+                else None,
+            }
+        )
+    except db.DuplicateName:
+        raise HTTPException(
+            status_code=409, detail=f'A project named "{name}" already exists.'
+        )
     return ProjectOut(**project)
 
 
 @app.get("/api/projects/{project_id}", response_model=ProjectOut)
-def get_project(project_id: str):
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        return ProjectOut(**p)
+def get_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return ProjectOut(**project)
 
 
 @app.patch("/api/projects/{project_id}", response_model=ProjectOut)
-def update_project(project_id: str, payload: ProjectUpdate):
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
+def update_project(
+    project_id: str, payload: ProjectUpdate, _auth: str = Depends(auth.get_current_user)
+):
+    if not db.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
 
-        if payload.name is not None:
-            n = payload.name.strip()
-            if not n:
-                raise HTTPException(
-                    status_code=400, detail="Project name cannot be empty."
-                )
-            # check duplicate
-            for other_id, other in _projects_store.items():
-                if other_id != project_id and other["name"].lower() == n.lower():
-                    raise HTTPException(
-                        status_code=409, detail=f'A project named "{n}" already exists.'
-                    )
-            p["name"] = n
+    fields: dict = {}
 
-        if payload.description is not None:
-            p["description"] = payload.description.strip() or None
+    if payload.name is not None:
+        n = payload.name.strip()
+        if not n:
+            raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+        if db.name_exists(n, exclude_id=project_id):
+            raise HTTPException(
+                status_code=409, detail=f'A project named "{n}" already exists.'
+            )
+        fields["name"] = n
 
-        if payload.chunk_strategy is not None:
-            if (
-                payload.chunk_strategy
-                and payload.chunk_strategy not in CHUNK_STRATEGIES
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"chunk_strategy must be one of {sorted(CHUNK_STRATEGIES)}",
-                )
-            p["chunk_strategy"] = payload.chunk_strategy or None
+    if payload.description is not None:
+        fields["description"] = payload.description.strip() or None
 
-        if payload.chunk_size is not None:
-            if payload.chunk_size <= 0:
-                raise HTTPException(status_code=400, detail="chunk_size must be > 0.")
-            p["chunk_size"] = payload.chunk_size
+    if payload.chunk_strategy is not None:
+        if payload.chunk_strategy and payload.chunk_strategy not in CHUNK_STRATEGIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"chunk_strategy must be one of {sorted(CHUNK_STRATEGIES)}",
+            )
+        fields["chunk_strategy"] = payload.chunk_strategy or None
 
-        if payload.chunk_overlap is not None:
-            if payload.chunk_overlap < 0:
-                raise HTTPException(
-                    status_code=400, detail="chunk_overlap must be >= 0."
-                )
-            p["chunk_overlap"] = payload.chunk_overlap
+    if payload.chunk_size is not None:
+        if payload.chunk_size <= 0:
+            raise HTTPException(status_code=400, detail="chunk_size must be > 0.")
+        fields["chunk_size"] = payload.chunk_size
 
-        if payload.chunk_model is not None:
-            p["chunk_model"] = payload.chunk_model.strip() or None
+    if payload.chunk_overlap is not None:
+        if payload.chunk_overlap < 0:
+            raise HTTPException(status_code=400, detail="chunk_overlap must be >= 0.")
+        fields["chunk_overlap"] = payload.chunk_overlap
 
-        p["updated_at"] = _now_iso()
-        _projects_store[project_id] = p
-        _save_projects()
-        return ProjectOut(**p)
+    if payload.chunk_model is not None:
+        fields["chunk_model"] = payload.chunk_model.strip() or None
+
+    try:
+        project = db.update_project(project_id, fields)
+    except db.DuplicateName:
+        raise HTTPException(
+            status_code=409, detail="A project with that name already exists."
+        )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return ProjectOut(**project)
 
 
 @app.post("/api/projects/{project_id}/touch", response_model=ProjectOut)
-def touch_project(project_id: str):
-    """Bump updated_at and increment file_count — kept for legacy Playground
-    conversions that don't use the dedicated /files endpoint."""
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        p.setdefault("files", [])
-        if p["files"]:
-            # Detailed files already tracked — file_count is authoritative
-            p["file_count"] = len(p["files"])
-        else:
-            p["file_count"] = int(p.get("file_count", 0)) + 1
-        p["updated_at"] = _now_iso()
-        _projects_store[project_id] = p
-        _save_projects()
-        return ProjectOut(
-            **{k: v for k, v in p.items() if k in ProjectOut.model_fields}
-        )
+def touch_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
+    """Bump updated_at so the project surfaces as recently used. The Playground
+    pings this after a conversion. (It no longer bumps a file count -- only
+    real uploads via the /files endpoint do that.)"""
+    project = db.touch_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return ProjectOut(**project)
 
 
 # ---- Project files (many files per project) --------------------------------
 
 
 @app.get("/api/projects/{project_id}/files", response_model=List[ProjectFileOut])
-def list_project_files(project_id: str):
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        files = p.get("files", [])
-        # newest first
-        files_sorted = sorted(
-            files, key=lambda x: x.get("created_at", ""), reverse=True
-        )
-        return [ProjectFileOut(**f) for f in files_sorted]
+def list_project_files(project_id: str, _auth: str = Depends(auth.get_current_user)):
+    if not db.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return [ProjectFileOut(**f) for f in db.list_files(project_id)]
 
 
 @app.post("/api/projects/{project_id}/files", response_model=List[ProjectFileOut])
-async def upload_project_files(project_id: str, files: List[UploadFile] = File(...)):
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
+async def upload_project_files(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    _auth: str = Depends(auth.get_current_user),
+):
+    if not db.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
 
@@ -570,53 +555,35 @@ async def upload_project_files(project_id: str, files: List[UploadFile] = File(.
                 status_code=500, detail=f"{upload.filename}: conversion failed: {e}"
             )
 
-        rec = {
-            "id": uuid.uuid4().hex[:10],
-            "filename": upload.filename,
-            "title": result.title,
-            "markdown": result.markdown,
-            "created_at": _now_iso(),
-            "chars": len(result.markdown),
-        }
-        new_records.append(rec)
+        new_records.append(
+            {
+                "filename": upload.filename,
+                "title": result.title,
+                "markdown": result.markdown,
+                "chars": len(result.markdown),
+            }
+        )
 
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        p.setdefault("files", [])
-        # prepend newest
-        p["files"] = new_records + p["files"]
-        p["file_count"] = len(p["files"])
-        p["updated_at"] = _now_iso()
-        _projects_store[project_id] = p
-        _save_projects()
-        return [ProjectFileOut(**r) for r in new_records]
+    if not new_records:
+        raise HTTPException(status_code=400, detail="No valid files provided.")
+
+    created = db.add_files(project_id, new_records)
+    return [ProjectFileOut(**r) for r in created]
 
 
 @app.delete("/api/projects/{project_id}/files/{file_id}", status_code=204)
-def delete_project_file(project_id: str, file_id: str):
-    with _projects_lock:
-        p = _projects_store.get(project_id)
-        if not p:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        files = p.get("files", [])
-        orig_len = len(files)
-        p["files"] = [f for f in files if f.get("id") != file_id]
-        if len(p["files"]) == orig_len:
-            raise HTTPException(status_code=404, detail="File not found.")
-        p["file_count"] = len(p["files"])
-        p["updated_at"] = _now_iso()
-        _projects_store[project_id] = p
-        _save_projects()
+def delete_project_file(
+    project_id: str, file_id: str, _auth: str = Depends(auth.get_current_user)
+):
+    if not db.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    if not db.delete_file(project_id, file_id):
+        raise HTTPException(status_code=404, detail="File not found.")
     return None
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)
-def delete_project(project_id: str):
-    with _projects_lock:
-        if project_id not in _projects_store:
-            raise HTTPException(status_code=404, detail="Project not found.")
-        del _projects_store[project_id]
-        _save_projects()
+def delete_project(project_id: str, _auth: str = Depends(auth.get_current_user)):
+    if not db.delete_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
     return None
